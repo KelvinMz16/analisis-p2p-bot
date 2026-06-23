@@ -65,27 +65,8 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 CF_PROXY = os.getenv("CLOUDFLARE_PROXY", "").rstrip("/")
 USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
 
-if CF_PROXY and USE_PROXY:
-    API_BASE = f"{CF_PROXY}/telegram-api/"
-else:
-    API_BASE = "https://api.telegram.org/bot"
-
-# Sesion HTTP con SSL verification desactivado (HF bloquea ciertos certificados)
 import urllib3
-import ssl as ssl_mod
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-_sesion = requests.Session()
-_sesion.verify = False
-# Configurar adapter SSL mas permisivo
-_adapter = requests.adapters.HTTPAdapter(
-    pool_connections=1, pool_maxsize=1,
-    max_retries=urllib3.Retry(total=2, backoff_factor=0.5)
-)
-_sesion.mount('https://', _adapter)
-_sesion.headers.update({
-    "Content-Type": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-})
 # ============================================================
 
 
@@ -119,54 +100,45 @@ def _raw_ssl_post(url, json_data, timeout=60):
         conn.close()
 
 
-# Construir URLs para proxy (HTTP) y directa (HTTPS)
 _DIRECT_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-_PROXY_HTTP = (CF_PROXY.replace("https://", "http://") if CF_PROXY else "") if USE_PROXY else ""
+_PROXY_URL = CF_PROXY if (CF_PROXY and USE_PROXY) else ""
+
+
+def _api_call(method, payload, timeout=60):
+    """Intenta proxy primero. Si responde (ok o error), devuelve eso.
+    Solo si el proxy no responde (timeout/connection error), prueba directo."""
+    if _PROXY_URL:
+        proxy_url = f"{_PROXY_URL}/telegram-api/{TELEGRAM_TOKEN}/{method}"
+        try:
+            r = requests.post(proxy_url, json=payload, timeout=timeout)
+            return r.json()
+        except requests.exceptions.Timeout:
+            print(f"  api/{method} proxy timeout", flush=True)
+        except Exception as ex:
+            print(f"  api/{method} proxy {type(ex).__name__}", flush=True)
+
+    direct = f"{_DIRECT_BASE}/{method}"
+    try:
+        return _raw_ssl_post(direct, payload, timeout=timeout)
+    except Exception as ex:
+        print(f"  api/{method} raw {type(ex).__name__}", flush=True)
+    try:
+        r = requests.post(direct, json=payload, timeout=timeout, verify=False)
+        return r.json()
+    except Exception as ex:
+        print(f"  api/{method} req {type(ex).__name__}", flush=True)
+    return None
 
 
 def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
-
-    direct_url = f"{_DIRECT_BASE}/{method}"
-
-    def _try_req(label, url, extra=None):
-        try:
-            kw = {"json": payload, "timeout": 30}
-            if extra:
-                kw.update(extra)
-            r = requests.post(url, **kw)
-            if r.status_code == 400 and ignore_400:
-                return None
-            r.raise_for_status()
-            return r.json()
-        except Exception as ex:
-            print(f"  tg/{method} {label}: {type(ex).__name__}", flush=True)
-            return None
-
-    # 1: Proxy via HTTP
-    if _PROXY_HTTP:
-        r = _try_req("proxy", f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/{method}")
-        if r:
-            return r
-
-    # 2: Direct HTTPS verify=False
-    r = _try_req("req", direct_url, {"verify": False})
-    if r:
-        return r
-
-    # 3: Raw http.client SSL (ultimo recurso)
-    try:
-        result = _raw_ssl_post(direct_url, payload, timeout=30)
-        if result is not None:
-            if ignore_400 and not result.get("ok") and result.get("error_code") == 400:
-                return None
-            return result
-    except Exception as ex:
-        print(f"  tg/{method} raw: {type(ex).__name__}", flush=True)
-
-    print(f"  ! tg/{method}: todas fallaron", flush=True)
-    return None
+    result = _api_call(method, payload, timeout=60)
+    if result is None:
+        print(f"  ! tg/{method}: sin respuesta", flush=True)
+    elif ignore_400 and not result.get("ok") and result.get("error_code") == 400:
+        return None
+    return result
 
 
 def enviar_menu(chat_id=None, texto=None):
@@ -412,33 +384,10 @@ def procesar_callback(cq):
 
 def _get_updates(offset):
     payload = {"offset": offset, "timeout": 10}
-
-    direct_url = f"{_DIRECT_BASE}/getUpdates"
-
-    # Estrategia 1: Proxy via HTTP
-    if _PROXY_HTTP:
-        try:
-            r = requests.post(f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/getUpdates", json=payload, timeout=20)
-            r.raise_for_status()
-            return r.json().get("result", [])
-        except Exception as ex:
-            print(f"  gU proxy: {type(ex).__name__}", flush=True)
-
-    # Estrategia 2: requests verify=False
-    try:
-        r = requests.post(direct_url, json=payload, timeout=20, verify=False)
-        r.raise_for_status()
-        return r.json().get("result", [])
-    except Exception as ex:
-        print(f"  gU req: {type(ex).__name__}", flush=True)
-
-    # Estrategia 3: Raw http.client
-    try:
-        return _raw_ssl_post(direct_url, payload, timeout=20).get("result", [])
-    except Exception as ex:
-        print(f"  gU raw: {type(ex).__name__}", flush=True)
-
-    print("  ! getUpdates: todas fallaron", flush=True)
+    result = _api_call("getUpdates", payload, timeout=30)
+    if result and result.get("ok"):
+        return result.get("result", [])
+    print("  ! getUpdates: fallo", flush=True)
     return []
 
 

@@ -13,15 +13,17 @@ async function handleRequest(request) {
   }
 
   // Proxy Telegram API
+  // Path: /telegram-api/{TOKEN}/{method}
   if (request.method === "POST" && url.pathname.startsWith("/telegram-api/")) {
     const parts = url.pathname.split("/");
-    const method = parts[parts.length - 1];
-    if (!method) {
+    const token = parts[2];
+    const method = parts[3];
+    if (!method || !token) {
       return new Response("Bad request", { status: 400 });
     }
     try {
       const body = await request.text();
-      const resp = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+      const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: body
