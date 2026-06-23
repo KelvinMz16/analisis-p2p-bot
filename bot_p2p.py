@@ -34,10 +34,8 @@ def obtener_precio_p2p(trade_type, asset="USDT"):
     payload = {
         "asset": asset,
         "fiat": "VES",
-        "merchantCheck": False,
         "page": 1,
         "rows": 10,
-        "payTypes": ["Banco de Venezuela", "Pago Movil"],
         "tradeType": trade_type
     }
     try:
