@@ -53,7 +53,7 @@ _sesion.timeout = 15
 # ============================================================
 # FUNCIONES TELEGRAM
 # ============================================================
-def _tg_call(method, payload=None, params=None):
+def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
     try:
@@ -62,10 +62,13 @@ def _tg_call(method, payload=None, params=None):
             r = _sesion.post(url, json=payload)
         else:
             r = _sesion.get(url, params=params)
+        if r.status_code == 400 and ignore_400:
+            return None
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        print(f"TG {method}: {e}", flush=True)
+        if "400" not in str(e) or not ignore_400:
+            print(f"TG {method}: {e}", flush=True)
         return None
 
 
@@ -108,7 +111,7 @@ def editar_mensaje(chat_id, message_id, texto):
     _tg_call("editMessageText", {
         "chat_id": chat_id, "message_id": message_id,
         "text": texto, "parse_mode": "Markdown", "reply_markup": kb
-    })
+    }, ignore_400=True)
 # ============================================================
 
 
