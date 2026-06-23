@@ -68,44 +68,48 @@ _sesion.headers.update({
 def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
-    url = f"{API_BASE}{TELEGRAM_TOKEN}/{method}"
 
-    # Estrategia 1: urllib (SSL nativo de Python)
+    # Probar primero directo a Telegram (timeout largo)
+    url_direct = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}"
     try:
         ctx = ssl_mod.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl_mod.CERT_NONE
         if payload is not None:
             data = json.dumps(payload).encode()
-            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+            req = urllib.request.Request(url_direct, data=data, headers={"Content-Type": "application/json"}, method="POST")
         else:
-            req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            req = urllib.request.Request(url_direct, method="GET")
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
             if resp.status == 400 and ignore_400:
                 return None
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         if e.code == 400 and ignore_400:
             return None
-        print(f"TG {method} HTTP {e.code}: {e.reason}", flush=True)
-        return None
+        print(f"TG directo HTTP {e.code}: {e.reason}", flush=True)
     except Exception as e:
-        print(f"TG {method}: {e}", flush=True)
+        print(f"TG directo: {e}", flush=True)
 
-    # Estrategia 2: requests (fallback)
-    try:
-        if payload is not None:
-            r = _sesion.post(url, json=payload)
-        else:
-            r = _sesion.get(url, params=params)
-        if r.status_code == 400 and ignore_400:
-            return None
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        if "400" not in str(e) or not ignore_400:
-            print(f"TG {method} (fallback): {e}", flush=True)
-        return None
+    # Fallback: via Cloudflare Worker
+    if CF_PROXY and USE_PROXY:
+        url_proxy = f"{CF_PROXY}/telegram-api/{TELEGRAM_TOKEN}/{method}"
+        try:
+            ctx = ssl_mod.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl_mod.CERT_NONE
+            if payload is not None:
+                data = json.dumps(payload).encode()
+                req = urllib.request.Request(url_proxy, data=data, headers={"Content-Type": "application/json"}, method="POST")
+            else:
+                req = urllib.request.Request(url_proxy, method="GET")
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                if resp.status == 400 and ignore_400:
+                    return None
+                return json.loads(resp.read())
+        except Exception as e:
+            if "400" not in str(e) or not ignore_400:
+                print(f"TG proxy: {e}", flush=True)
+
+    return None
 
 
 def enviar_menu(chat_id=None, texto=None):
@@ -261,25 +265,44 @@ def procesar_callback(cq):
         )
 
 
+def _get_updates(offset):
+    ctx = ssl_mod.create_default_context()
+    url_direct = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    data = json.dumps({"offset": offset, "timeout": 10}).encode()
+
+    # Directo primero
+    try:
+        req = urllib.request.Request(url_direct, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+            return json.loads(r.read()).get("result", [])
+    except:
+        pass
+
+    # Proxy fallback
+    if CF_PROXY and USE_PROXY:
+        url_proxy = f"{CF_PROXY}/telegram-api/{TELEGRAM_TOKEN}/getUpdates"
+        try:
+            ctx2 = ssl_mod.create_default_context()
+            ctx2.check_hostname = False
+            ctx2.verify_mode = ssl_mod.CERT_NONE
+            req = urllib.request.Request(url_proxy, data=data, headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, context=ctx2, timeout=15) as r:
+                return json.loads(r.read()).get("result", [])
+        except:
+            pass
+    return []
+
+
 def polling_telegram():
     offset = 0
     while True:
-        try:
-            r = _sesion.post(
-                f"{API_BASE}{TELEGRAM_TOKEN}/getUpdates",
-                json={"offset": offset, "timeout": 15}
-            )
-            r.raise_for_status()
-            for update in r.json().get("result", []):
-                offset = update["update_id"] + 1
-                if "callback_query" in update:
-                    procesar_callback(update["callback_query"])
-                elif "message" in update and update["message"].get("text"):
-                    procesar_mensaje(update["message"]["text"], update["message"]["chat"]["id"])
-        except requests.exceptions.Timeout:
-            pass
-        except Exception as e:
-            print(f"TG polling: {e}", flush=True)
+        updates = _get_updates(offset)
+        for update in updates:
+            offset = update["update_id"] + 1
+            if "callback_query" in update:
+                procesar_callback(update["callback_query"])
+            elif "message" in update and update["message"].get("text"):
+                procesar_mensaje(update["message"]["text"], update["message"]["chat"]["id"])
         time.sleep(3)
 # ============================================================
 
