@@ -128,48 +128,44 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
 
-    # Estrategia 1: Proxy via HTTP (evita SSL handshake failures)
-    if _PROXY_HTTP:
-        proxy_url = f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/{method}"
+    direct_url = f"{_DIRECT_BASE}/{method}"
+
+    def _try_req(label, url, extra=None):
         try:
-            r = requests.post(proxy_url, json=payload, timeout=30)
+            kw = {"json": payload, "timeout": 60}
+            if extra:
+                kw.update(extra)
+            r = requests.post(url, **kw)
             if r.status_code == 400 and ignore_400:
                 return None
             r.raise_for_status()
             return r.json()
-        except Exception:
-            pass
-
-    # Estrategia 2: Directo HTTPS con verify=True
-    direct_url = f"{_DIRECT_BASE}/{method}"
-    try:
-        r = requests.post(direct_url, json=payload, timeout=60)
-        if r.status_code == 400 and ignore_400:
+        except Exception as ex:
+            print(f"  tg/{method} {label}: {type(ex).__name__}", flush=True)
             return None
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.SSLError:
-        pass
-    except Exception:
-        pass
 
-    # Estrategia 3: Directo sin verify SSL
+    # 1: Proxy via HTTP
+    if _PROXY_HTTP:
+        r = _try_req("proxy", f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/{method}")
+        if r:
+            return r
+
+    # 2: Raw http.client SSL (mas confiable en HF)
     try:
-        r = requests.post(direct_url, json=payload, timeout=60, verify=False)
-        if r.status_code == 400 and ignore_400:
-            return None
-        r.raise_for_status()
-        return r.json()
-    except Exception:
-        pass
+        result = _raw_ssl_post(direct_url, payload, timeout=60)
+        if result is not None:
+            if ignore_400 and not result.get("ok") and result.get("error_code") == 400:
+                return None
+            return result
+    except Exception as ex:
+        print(f"  tg/{method} raw: {type(ex).__name__}", flush=True)
 
-    # Estrategia 4: Raw http.client (bypasses urllib3 completamente)
-    try:
-        return _raw_ssl_post(direct_url, payload, timeout=60)
-    except Exception:
-        pass
+    # 3: requests verify=False
+    r = _try_req("req", direct_url, {"verify": False})
+    if r:
+        return r
 
-    print(f"TG {method}: No se pudo conectar", flush=True)
+    print(f"  ! tg/{method}: todas fallaron", flush=True)
     return None
 
 
@@ -417,25 +413,31 @@ def procesar_callback(cq):
 def _get_updates(offset):
     payload = {"offset": offset, "timeout": 10}
 
-    # Proxy via HTTP
+    # Estrategia 1: Proxy via HTTP (evita SSL local)
     if _PROXY_HTTP:
         try:
-            r = requests.post(f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/getUpdates", json=payload, timeout=20)
+            r = requests.post(f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/getUpdates", json=payload, timeout=25)
             r.raise_for_status()
             return r.json().get("result", [])
-        except:
-            pass
+        except Exception as ex:
+            print(f"  getUpdates proxy: {type(ex).__name__}", flush=True)
 
-    # Directo HTTPS
-    url = f"{_DIRECT_BASE}/getUpdates"
-    for verify in [True, False]:
-        try:
-            r = requests.post(url, json=payload, timeout=30, verify=verify)
-            r.raise_for_status()
-            return r.json().get("result", [])
-        except:
-            pass
+    # Estrategia 2: Raw http.client (bypasses urllib3 completamente)
+    direct_url = f"{_DIRECT_BASE}/getUpdates"
+    try:
+        return _raw_ssl_post(direct_url, payload, timeout=25).get("result", [])
+    except Exception as ex:
+        print(f"  getUpdates raw: {type(ex).__name__}", flush=True)
 
+    # Estrategia 3: requests con verify=False
+    try:
+        r = requests.post(direct_url, json=payload, timeout=25, verify=False)
+        r.raise_for_status()
+        return r.json().get("result", [])
+    except Exception as ex:
+        print(f"  getUpdates req: {type(ex).__name__}", flush=True)
+
+    print("  ! getUpdates: todas fallaron", flush=True)
     return []
 
 
