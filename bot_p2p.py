@@ -290,11 +290,58 @@ def procesar_callback(cq):
             editar_mensaje(chat_id, msg_id, "No se pudieron obtener datos.")
             return
         resultados.sort(key=lambda x: x["margen"], reverse=True)
-        lines = [f"\U0001F4CA *Mejor: {resultados[0]['asset']}* | {resultados[0]['margen']:.2f}%\n"]
+
+        best = resultados[0]
+        worst = resultados[-1] if len(resultados) > 1 else best
+
+        texto = (
+            f"\U0001F4CA *Multi-cripto*\n"
+            f"\U0001F3C6 *Mejor: {best['asset']}* ({best['margen']:+.2f}%)\n"
+            f"\u26A0 Peor: {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
+            f"Selecciona una para detalle:\n"
+        )
+        kb = {"inline_keyboard": []}
         for r in resultados:
-            signo = "+" if r["margen"] >= 0 else ""
-            lines.append(f"{r['asset']}: C {r['compra']:.2f} | V {r['venta']:.2f} | *{signo}{r['margen']:.2f}%*")
-        editar_mensaje(chat_id, msg_id, "\n".join(lines))
+            label = f"{r['asset']} ({r['margen']:+.2f}%)"
+            if r == best:
+                label = f"\U0001F3C6 {r['asset']} ({r['margen']:+.2f}%)"
+            kb["inline_keyboard"].append([
+                {"text": label, "callback_data": f"detalle_{r['asset']}"}
+            ])
+        kb["inline_keyboard"].append([{"text": "\U0001F519 Volver", "callback_data": "menu"}])
+        _tg_call("editMessageText", {
+            "chat_id": chat_id, "message_id": msg_id,
+            "text": texto, "parse_mode": "Markdown",
+            "reply_markup": json.dumps(kb)
+        }, ignore_400=True)
+
+    elif data.startswith("detalle_"):
+        asset = data.split("_", 1)[1]
+        r = calcular_margen(asset)
+        if not r:
+            editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
+            return
+        ahorro = ((r['venta'] - r['compra']) / r['venta']) * 100
+        best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
+        estrella = " \U0001F3C6" if asset == best_asset else ""
+        kb = json.dumps({
+            "inline_keyboard": [
+                [{"text": "\U0001F4CA Volver", "callback_data": "arbitraje"},
+                 {"text": "\U0001F504 Actualizar", "callback_data": f"detalle_{asset}"}]
+            ]
+        })
+        _tg_call("editMessageText", {
+            "chat_id": chat_id, "message_id": msg_id,
+            "text": (
+                f"\U0001F4B0 *{asset} / VES*{estrella}\n"
+                f"Compra Maker: {r['compra']:.2f} VES\n"
+                f"Venta Maker:  {r['venta']:.2f} VES\n"
+                f"Ahorro compra: {ahorro:.2f}%\n"
+                f"Margen neto: {r['margen']:+.2f}%\n"
+                f"Ganancia: ${r['ganancia_usd']:.2f} por ${CONFIG['capital']}"
+            ),
+            "parse_mode": "Markdown", "reply_markup": kb
+        })
 
     elif data == "capital":
         ESTADOS_USUARIO[chat_id] = {"esperando": "capital"}
