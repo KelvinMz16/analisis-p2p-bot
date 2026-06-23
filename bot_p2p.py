@@ -102,32 +102,30 @@ def calcular_arbitraje():
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-def enviar_alerta_telegram(margen, compra, venta, ganancia):
+def enviar_telegram(mensaje):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return False
+    try:
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json=payload, timeout=10
+        )
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"Error al enviar mensaje Telegram: {e}")
+        return False
 
-    mensaje = (
+def enviar_alerta_telegram(margen, compra, venta, ganancia):
+    msg = (
         f"\U0001F514 *ALERTA P2P - Oportunidad Detectada*\n"
         f"Margen Neto: {margen:.2f}%\n"
         f"Compra: {compra:.2f} VES\n"
         f"Venta:  {venta:.2f} VES\n"
         f"Ganancia: ${ganancia:.2f} USD"
     )
-
-    try:
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": mensaje,
-            "parse_mode": "Markdown"
-        }
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json=payload,
-            timeout=10
-        )
-        r.raise_for_status()
-    except Exception as e:
-        print(f"Error al enviar mensaje Telegram: {e}")
+    enviar_telegram(msg)
 # ============================================================
 
 
@@ -163,11 +161,19 @@ if __name__ == "__main__":
     print("  Consultando cada 60 segundos...")
     print("=" * 60)
 
+    ciclo = 0
+    enviar_telegram("\U0001F4E1 *Bot P2P Iniciado*\nMonitoreando USDT/VES cada 60s")
+
     while True:
         try:
             calcular_arbitraje()
+            ciclo += 1
+            # Heartbeat cada 30 ciclos (30 min)
+            if ciclo % 30 == 0:
+                enviar_telegram(f"\u23F1 *Heartbeat* - {ciclo} ciclos sin novedades")
         except KeyboardInterrupt:
             print("\nBot detenido por el usuario.")
+            enviar_telegram("\u274C *Bot P2P Detenido*")
             break
         except Exception as e:
             print(f"Error en el bucle principal: {e}")
