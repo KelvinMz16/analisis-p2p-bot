@@ -44,7 +44,7 @@ HEADERS = {
 }
 
 URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-ASSETS_VES = ["USDT", "BTC", "ETH", "BNB", "USDC", "DAI", "BUSD"]
+ASSETS_VES = ["USDT", "BTC", "ETH", "BNB", "USDC", "SOL"]
 # ============================================================
 
 
