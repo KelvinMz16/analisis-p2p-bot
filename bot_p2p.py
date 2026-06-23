@@ -116,6 +116,7 @@ def monitorear_usdt():
 # ============================================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org")
 
 def enviar_telegram(mensaje, chat_id=None):
     if not TELEGRAM_TOKEN:
@@ -126,7 +127,7 @@ def enviar_telegram(mensaje, chat_id=None):
     try:
         payload = {"chat_id": cid, "text": mensaje, "parse_mode": "Markdown"}
         r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            f"{TELEGRAM_API_BASE}/bot{TELEGRAM_TOKEN}/sendMessage",
             json=payload, timeout=10
         )
         r.raise_for_status()
@@ -233,7 +234,7 @@ def polling_telegram():
     while True:
         try:
             r = requests.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+                f"{TELEGRAM_API_BASE}/bot{TELEGRAM_TOKEN}/getUpdates",
                 params={"offset": offset, "timeout": 30},
                 timeout=35
             )
