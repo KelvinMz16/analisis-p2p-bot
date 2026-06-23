@@ -268,13 +268,14 @@ def procesar_callback(cq):
     if data == "precio":
         r = calcular_margen("USDT")
         if r:
-            ahorro = ((r['venta'] - r['compra']) / r['venta']) * 100
+            desc = ((r['venta'] - r['compra']) / r['venta']) * 100
+            pri = ((r['venta'] - r['compra']) / r['compra']) * 100
             editar_mensaje(chat_id, msg_id,
                 f"\U0001F4B0 *USDT / VES*\n"
-                f"Compra Maker: {r['compra']:.2f} VES (ahorras {ahorro:.2f}%)\n"
-                f"Venta Maker:  {r['venta']:.2f} VES\n"
-                f"Margen neto: {r['margen']:.2f}%\n"
-                f"Ganancia: ${r['ganancia_usd']:.2f} por ${CONFIG['capital']}"
+                f"Compra: {r['compra']:.2f} VES (desc. {desc:.1f}%)\n"
+                f"Venta:  {r['venta']:.2f} VES (prima {pri:.1f}%)\n"
+                f"Margen: {r['margen']:.2f}%\n"
+                f"Ganancia: ${r['ganancia_usd']:.2f} \u00d7 ${CONFIG['capital']}"
             )
         else:
             editar_mensaje(chat_id, msg_id, "No se pudieron obtener precios.")
@@ -294,11 +295,19 @@ def procesar_callback(cq):
         best = resultados[0]
         worst = resultados[-1] if len(resultados) > 1 else best
 
+        # Señales independientes de compra y venta
+        mejor_compra = max(resultados, key=lambda x: ((x['venta'] - x['compra']) / x['venta']))
+        mejor_venta = max(resultados, key=lambda x: ((x['venta'] - x['compra']) / x['compra']))
+
         texto = (
             f"\U0001F4CA *Multi-cripto*\n"
-            f"\U0001F3C6 *Mejor: {best['asset']}* ({best['margen']:+.2f}%)\n"
-            f"\u26A0 Peor: {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
-            f"Selecciona una para detalle:\n"
+            f"\U0001F3C6 *Mejor margen:* {best['asset']} ({best['margen']:+.2f}%)\n"
+            f"\U0001F4E5 *Señal COMPRA:* {mejor_compra['asset']} "
+            f"(desc. {(mejor_compra['venta']-mejor_compra['compra'])/mejor_compra['venta']*100:.1f}%)\n"
+            f"\U0001F4E4 *Señal VENTA:* {mejor_venta['asset']} "
+            f"(prima {(mejor_venta['venta']-mejor_venta['compra'])/mejor_venta['compra']*100:.1f}%)\n"
+            f"\u26A0 Evitar: {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
+            f"Selecciona para detalle:\n"
         )
         kb = {"inline_keyboard": []}
         for r in resultados:
@@ -321,7 +330,8 @@ def procesar_callback(cq):
         if not r:
             editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
             return
-        ahorro = ((r['venta'] - r['compra']) / r['venta']) * 100
+        descuento = ((r['venta'] - r['compra']) / r['venta']) * 100
+        prima = ((r['venta'] - r['compra']) / r['compra']) * 100
         best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
         estrella = " \U0001F3C6" if asset == best_asset else ""
         kb = json.dumps({
@@ -334,11 +344,12 @@ def procesar_callback(cq):
             "chat_id": chat_id, "message_id": msg_id,
             "text": (
                 f"\U0001F4B0 *{asset} / VES*{estrella}\n"
-                f"Compra Maker: {r['compra']:.2f} VES\n"
-                f"Venta Maker:  {r['venta']:.2f} VES\n"
-                f"Ahorro compra: {ahorro:.2f}%\n"
+                f"Compra: {r['compra']:.2f} VES\n"
+                f"Venta:   {r['venta']:.2f} VES\n"
+                f"Desc. compra: {descuento:.1f}%\n"
+                f"Prima venta: {prima:.1f}%\n"
                 f"Margen neto: {r['margen']:+.2f}%\n"
-                f"Ganancia: ${r['ganancia_usd']:.2f} por ${CONFIG['capital']}"
+                f"Ganancia: ${r['ganancia_usd']:.2f} \u00d7 ${CONFIG['capital']}"
             ),
             "parse_mode": "Markdown", "reply_markup": kb
         })
