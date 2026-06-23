@@ -104,29 +104,38 @@ _DIRECT_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 _PROXY_URL = CF_PROXY if (CF_PROXY and USE_PROXY) else ""
 
 
+def _raw_post(url, data, timeout=60):
+    """POST via raw http.client (bypasses urllib3/requests SSL completamente)."""
+    try:
+        return _raw_ssl_post(url, data, timeout=timeout)
+    except Exception as ex:
+        print(f"  raw {type(ex).__name__}", flush=True)
+        return None
+
+
 def _api_call(method, payload, timeout=60):
     """Intenta proxy primero. Si responde (ok o error), devuelve eso.
     Solo si el proxy no responde (timeout/connection error), prueba directo."""
     if _PROXY_URL:
         proxy_url = f"{_PROXY_URL}/telegram-api/{TELEGRAM_TOKEN}/{method}"
+        result = _raw_post(proxy_url, payload, timeout=timeout)
+        if result is not None:
+            return result
         try:
-            r = requests.post(proxy_url, json=payload, timeout=timeout)
+            r = requests.post(proxy_url, json=payload, timeout=timeout, verify=False)
             return r.json()
-        except requests.exceptions.Timeout:
-            print(f"  api/{method} proxy timeout", flush=True)
         except Exception as ex:
             print(f"  api/{method} proxy {type(ex).__name__}", flush=True)
 
     direct = f"{_DIRECT_BASE}/{method}"
-    try:
-        return _raw_ssl_post(direct, payload, timeout=timeout)
-    except Exception as ex:
-        print(f"  api/{method} raw {type(ex).__name__}", flush=True)
+    result = _raw_post(direct, payload, timeout=timeout)
+    if result is not None:
+        return result
     try:
         r = requests.post(direct, json=payload, timeout=timeout, verify=False)
         return r.json()
     except Exception as ex:
-        print(f"  api/{method} req {type(ex).__name__}", flush=True)
+        print(f"  api/{method} dir {type(ex).__name__}", flush=True)
     return None
 
 
