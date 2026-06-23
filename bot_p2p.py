@@ -1,7 +1,10 @@
 import json
 import os
+import ssl as ssl_mod
 import threading
 import time
+import urllib.request
+import urllib.error
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -42,11 +45,20 @@ else:
 
 # Sesion HTTP con SSL verification desactivado (HF bloquea ciertos certificados)
 import urllib3
+import ssl as ssl_mod
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _sesion = requests.Session()
 _sesion.verify = False
-_sesion.headers.update({"Content-Type": "application/json"})
-_sesion.timeout = 15
+# Configurar adapter SSL mas permisivo
+_adapter = requests.adapters.HTTPAdapter(
+    pool_connections=1, pool_maxsize=1,
+    max_retries=urllib3.Retry(total=2, backoff_factor=0.5)
+)
+_sesion.mount('https://', _adapter)
+_sesion.headers.update({
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
 # ============================================================
 
 
@@ -56,8 +68,32 @@ _sesion.timeout = 15
 def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
+    url = f"{API_BASE}{TELEGRAM_TOKEN}/{method}"
+
+    # Estrategia 1: urllib (SSL nativo de Python)
     try:
-        url = f"{API_BASE}{TELEGRAM_TOKEN}/{method}"
+        ctx = ssl_mod.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl_mod.CERT_NONE
+        if payload is not None:
+            data = json.dumps(payload).encode()
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        else:
+            req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+            if resp.status == 400 and ignore_400:
+                return None
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 400 and ignore_400:
+            return None
+        print(f"TG {method} HTTP {e.code}: {e.reason}", flush=True)
+        return None
+    except Exception as e:
+        print(f"TG {method}: {e}", flush=True)
+
+    # Estrategia 2: requests (fallback)
+    try:
         if payload is not None:
             r = _sesion.post(url, json=payload)
         else:
@@ -68,7 +104,7 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
         return r.json()
     except Exception as e:
         if "400" not in str(e) or not ignore_400:
-            print(f"TG {method}: {e}", flush=True)
+            print(f"TG {method} (fallback): {e}", flush=True)
         return None
 
 
