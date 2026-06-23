@@ -439,18 +439,37 @@ def loop_monitoreo():
     ciclo = 0
     while True:
         try:
-            r = calcular_margen("USDT")
-            if r:
-                print(f"USDT: C {r['compra']:.2f} | V {r['venta']:.2f} | {r['margen']:.2f}%", flush=True)
-                if r["margen"] >= CONFIG["margen_objetivo"]:
-                    print(">>> OPORTUNIDAD <<<", flush=True)
+            mejores = []
+            for asset in ASSETS_VES:
+                r = calcular_margen(asset)
+                if r:
+                    mejores.append(r)
+                    print(f"  {asset}: {r['margen']:+.2f}%", flush=True)
+                time.sleep(0.5)
+
+            if mejores:
+                mejores.sort(key=lambda x: x["margen"], reverse=True)
+                top = mejores[0]
+
+                if top["margen"] >= CONFIG["margen_objetivo"]:
+                    print(f">>> OPORTUNIDAD {top['asset']} <<<", flush=True)
                     _tg_call("sendMessage", {
                         "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                        "text": f"\U0001F514 *ALERTA P2P - USDT*\nCompra: {r['compra']:.2f} VES\nVenta: {r['venta']:.2f} VES\nMargen: {r['margen']:.2f}%\nGanancia: ${r['ganancia_usd']:.2f}"
+                        "text": (
+                            f"\U0001F514 *ALERTA P2P*\n"
+                            f"\U0001F3C6 {top['asset']} | Margen: {top['margen']:+.2f}%\n"
+                            f"Compra: {top['compra']:.2f} VES\n"
+                            f"Venta:  {top['venta']:.2f} VES\n"
+                            f"Ganancia: ${top['ganancia_usd']:.2f} \u00d7 ${CONFIG['capital']}"
+                        )
                     })
+
             ciclo += 1
-            if ciclo % 30 == 0:
-                enviar_menu(texto=f"\u23F1 *Heartbeat* - {ciclo} ciclos sin novedades")
+            if ciclo % 30 == 0 and mejores:
+                enviar_menu(texto=(
+                    f"\u23F1 *Heartbeat* - {ciclo} ciclos\n"
+                    f"\U0001F3C6 Mejor: {top['asset']} ({top['margen']:+.2f}%)"
+                ))
         except Exception as e:
             print(f"Error: {e}", flush=True)
         time.sleep(60)
