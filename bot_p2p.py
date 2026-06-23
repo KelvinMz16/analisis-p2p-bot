@@ -39,6 +39,14 @@ if CF_PROXY and USE_PROXY:
     API_BASE = f"{CF_PROXY}/telegram-api/"
 else:
     API_BASE = "https://api.telegram.org/bot"
+
+# Sesion HTTP con SSL verification desactivado (HF bloquea ciertos certificados)
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+_sesion = requests.Session()
+_sesion.verify = False
+_sesion.headers.update({"Content-Type": "application/json"})
+_sesion.timeout = 15
 # ============================================================
 
 
@@ -51,9 +59,9 @@ def _tg_call(method, payload=None, params=None):
     try:
         url = f"{API_BASE}{TELEGRAM_TOKEN}/{method}"
         if payload is not None:
-            r = requests.post(url, json=payload, timeout=15)
+            r = _sesion.post(url, json=payload)
         else:
-            r = requests.get(url, params=params, timeout=15)
+            r = _sesion.get(url, params=params)
         r.raise_for_status()
         return r.json()
     except Exception as e:
@@ -218,10 +226,9 @@ def polling_telegram():
     offset = 0
     while True:
         try:
-            r = requests.post(
+            r = _sesion.post(
                 f"{API_BASE}{TELEGRAM_TOKEN}/getUpdates",
-                json={"offset": offset, "timeout": 15},
-                timeout=20
+                json={"offset": offset, "timeout": 15}
             )
             r.raise_for_status()
             for update in r.json().get("result", []):
