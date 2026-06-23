@@ -239,11 +239,7 @@ threading.Thread(target=lambda: HTTPServer(("0.0.0.0", 7860), HealthHandler).ser
 # MONITOREO (hilo principal)
 # ============================================================
 def loop_monitoreo():
-    print("=" * 60, flush=True)
-    print("  Monitoreo P2P iniciado (cada 60s)", flush=True)
-    print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
-    print("=" * 60, flush=True)
-
+    print("  Monitoreo cada 60s...", flush=True)
     ciclo = 0
     while True:
         try:
@@ -272,12 +268,23 @@ def loop_monitoreo():
 
 
 if __name__ == "__main__":
-    if TELEGRAM_TOKEN:
-        threading.Thread(target=run_telegram, daemon=True).start()
-        time.sleep(3)
-        enviar_telegram(f"\U0001F4E1 *Bot P2P Iniciado*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%")
+    print("=" * 60, flush=True)
+    print("  Bot P2P Binance - Venezuela", flush=True)
+    print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
+    print("=" * 60, flush=True)
 
-    try:
-        loop_monitoreo()
-    except KeyboardInterrupt:
-        print("\nDetenido.", flush=True)
+    # Monitoreo en hilo secundario (no usa asyncio)
+    threading.Thread(target=loop_monitoreo, daemon=True).start()
+    time.sleep(2)
+
+    # PTB en el hilo PRINCIPAL (requiere asyncio en main thread)
+    if TELEGRAM_TOKEN:
+        enviar_telegram(f"\U0001F4E1 *Bot P2P Iniciado*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%")
+        run_telegram()
+    else:
+        print("[Bot] TELEGRAM_TOKEN no configurado.", flush=True)
+        try:
+            while True:
+                time.sleep(60)
+        except KeyboardInterrupt:
+            print("\nDetenido.", flush=True)
