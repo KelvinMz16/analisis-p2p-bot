@@ -58,23 +58,41 @@ ASSETS_VES = ["USDT", "BTC", "ETH", "BNB", "USDC", "SOL"]
 
 
 # ============================================================
-# TELEGRAM - CONFIG
+# TELEGRAM - CONFIG (exact pattern from youtube-shorts-bot)
 # ============================================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-CF_PROXY = os.getenv("CLOUDFLARE_PROXY", "").rstrip("/")
-USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
+CLOUDFLARE_PROXY = os.getenv("CLOUDFLARE_PROXY", "https://ves-arbitraje-p2p.kelvinyohan14.workers.dev").rstrip("/")
+USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
 
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+_PROXY_HTTP = CLOUDFLARE_PROXY
+if _PROXY_HTTP.startswith("https://"):
+    _PROXY_HTTP = "http://" + _PROXY_HTTP[8:]
+
+_DIRECT_API_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+if USE_PROXY:
+    API_URL = f"{_PROXY_HTTP}/telegram-api"
+else:
+    API_URL = _DIRECT_API_BASE
 # ============================================================
 
 
 # ============================================================
-# FUNCIONES TELEGRAM
+# FUNCIONES TELEGRAM (exact pattern from youtube-shorts-bot)
 # ============================================================
+_session = None
+def _get_session():
+    global _session
+    if _session is None:
+        from requests.adapters import HTTPAdapter
+        _session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=1)
+        _session.mount("http://", adapter)
+        _session.mount("https://", adapter)
+    return _session
+
+
 def _raw_ssl_post(url, json_data, timeout=60):
-    """Fallback raw HTTP client para bypassear errores SSL de urllib3."""
     import http.client
     import urllib.parse
     ctx = ssl_mod.create_default_context()
@@ -83,7 +101,7 @@ def _raw_ssl_post(url, json_data, timeout=60):
     try:
         ctx.minimum_version = ssl_mod.TLSVersion.TLSv1_2
     except AttributeError:
-        pass
+        ctx.options |= ssl_mod.OP_NO_TLSv1 | ssl_mod.OP_NO_TLSv1_1
     try:
         ctx.set_ciphers('DEFAULT:@SECLEVEL=0')
     except ssl_mod.SSLError:
@@ -92,47 +110,60 @@ def _raw_ssl_post(url, json_data, timeout=60):
     body = json.dumps(json_data).encode()
     headers = {'Content-Type': 'application/json', 'Content-Length': str(len(body))}
     conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, context=ctx, timeout=timeout)
+    path = parsed.path + ('?' + parsed.query if parsed.query else '')
     try:
-        conn.request("POST", parsed.path, body=body, headers=headers)
+        conn.request('POST', path, body=body, headers=headers)
         resp = conn.getresponse()
-        return json.loads(resp.read())
-    finally:
+        result = json.loads(resp.read().decode())
         conn.close()
+        return result
+    except Exception:
+        conn.close()
+        raise
 
 
-_DIRECT_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-_PROXY_URL = (CF_PROXY.replace("https://", "http://") if CF_PROXY else "") if USE_PROXY else ""
-
-
-def _api_call(method, payload, timeout=60):
-    if _PROXY_URL:
-        proxy_url = f"{_PROXY_URL}/telegram-api/{TELEGRAM_TOKEN}/{method}"
+def _try_url(method, prefix, url, data, timeout):
+    sess = _get_session()
+    for attempt in range(2):
         try:
-            r = requests.post(proxy_url, json=payload, timeout=timeout)
-            return r.json()
-        except Exception as ex:
-            print(f"  api/{method} proxy {type(ex).__name__}", flush=True)
+            resp = sess.post(url, json=data, timeout=timeout)
+            return resp.json(), None
+        except Exception as e:
+            err_str = str(e)
+            if attempt == 1 and data and ('SSLError' in err_str or 'UNEXPECTED_EOF' in err_str or 'EOF occurred' in err_str):
+                try:
+                    return _raw_ssl_post(url, json_data=data, timeout=timeout), None
+                except Exception:
+                    pass
+            if attempt < 1:
+                import time
+                time.sleep(1)
+    return None, "All retries failed"
 
-    direct = f"{_DIRECT_BASE}/{method}"
-    try:
-        return _raw_ssl_post(direct, payload, timeout=timeout)
-    except Exception as ex:
-        print(f"  api/{method} raw {type(ex).__name__}", flush=True)
-    try:
-        r = requests.post(direct, json=payload, timeout=timeout, verify=False)
-        return r.json()
-    except Exception as ex:
-        print(f"  api/{method} dir {type(ex).__name__}", flush=True)
-    return None
+
+def _api_call(method, data=None, timeout=15):
+    if USE_PROXY:
+        proxy_url = f"{API_URL}/{method}"
+        result, error = _try_url(method, "Proxy", proxy_url, data, timeout)
+        if result and result.get("ok"):
+            return result
+        direct_url = f"{_DIRECT_API_BASE}/{method}"
+        result, error = _try_url(method, "Direct", direct_url, data, timeout)
+        if result:
+            return result
+    else:
+        direct_url = f"{_DIRECT_API_BASE}/{method}"
+        result, error = _try_url(method, "Direct", direct_url, data, timeout)
+        if result:
+            return result
+    return {"ok": False, "error": "All retries failed"}
 
 
 def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
-    result = _api_call(method, payload, timeout=60)
-    if result is None:
-        print(f"  ! tg/{method}: sin respuesta", flush=True)
-    elif ignore_400 and not result.get("ok") and result.get("error_code") == 400:
+    result = _api_call(method, payload, timeout=15)
+    if ignore_400 and not result.get("ok") and result.get("error_code") == 400:
         return None
     return result
 
@@ -380,10 +411,9 @@ def procesar_callback(cq):
 
 def _get_updates(offset):
     payload = {"offset": offset, "timeout": 10}
-    result = _api_call("getUpdates", payload, timeout=30)
+    result = _api_call("getUpdates", payload, timeout=20)
     if result and result.get("ok"):
         return result.get("result", [])
-    print("  ! getUpdates: fallo", flush=True)
     return []
 
 

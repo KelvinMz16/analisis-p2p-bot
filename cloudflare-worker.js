@@ -5,25 +5,17 @@ addEventListener('fetch', event => {
 async function handleRequest(request) {
   const url = new URL(request.url);
 
-  // Health check
-  if (url.pathname === "/" || url.pathname === "/health") {
-    return new Response(JSON.stringify({ status: "ok" }), {
+  if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
+    return new Response(JSON.stringify({ status: "ok", service: "Bot Proxy" }), {
       headers: { "Content-Type": "application/json" }
     });
   }
 
-  // Proxy Telegram API
-  // Path: /telegram-api/{TOKEN}/{method}
   if (request.method === "POST" && url.pathname.startsWith("/telegram-api/")) {
-    const parts = url.pathname.split("/");
-    const token = parts[2];
-    const method = parts[3];
-    if (!method || !token) {
-      return new Response("Bad request", { status: 400 });
-    }
+    const method = url.pathname.replace("/telegram-api/", "");
     try {
       const body = await request.text();
-      const resp = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      const resp = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: body
@@ -33,7 +25,10 @@ async function handleRequest(request) {
         headers: { "Content-Type": "application/json" }
       });
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), { status: 500 });
+      return new Response(JSON.stringify({ ok: false, error: e.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
     }
   }
 
