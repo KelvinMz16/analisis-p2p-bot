@@ -5,6 +5,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone, timedelta
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -54,6 +55,14 @@ HEADERS = {
 
 URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 ASSETS_VES = ["USDT", "BTC", "ETH", "BNB", "USDC", "SOL"]
+
+VENEZUELA_TZ = timezone(timedelta(hours=-4))
+SLEEP_START = 0  # 12 AM
+SLEEP_END = 7    # 7 AM
+
+
+def en_horario():
+    return not (SLEEP_START <= datetime.now(VENEZUELA_TZ).hour < SLEEP_END)
 # ============================================================
 
 
@@ -453,11 +462,29 @@ threading.Thread(target=lambda: HTTPServer(("0.0.0.0", 7860), HealthHandler).ser
 # ============================================================
 # MONITOREO
 # ============================================================
+_ESTADO_SUENO = None  # "dormido" | "despierto" | None
+
+
 def loop_monitoreo():
+    global _ESTADO_SUENO
     print("  Monitoreo cada 60s...", flush=True)
     ciclo = 0
     while True:
         try:
+            activo = en_horario()
+
+            # Cambio de estado sueño -> despierto
+            if activo and _ESTADO_SUENO == "dormido":
+                _ESTADO_SUENO = "despierto"
+                enviar_menu(texto="\u2600\ufe0f *Buenos d\u00edas!* Bot activo.")
+                print("  >>> Buenos dias!", flush=True)
+            elif not activo and _ESTADO_SUENO != "dormido":
+                _ESTADO_SUENO = "dormido"
+                print("  >>> Modo silencioso (12 AM - 7 AM)", flush=True)
+
+            if _ESTADO_SUENO is None:
+                _ESTADO_SUENO = "despierto" if activo else "dormido"
+
             mejores = []
             for asset in ASSETS_VES:
                 r = calcular_margen(asset)
@@ -465,6 +492,10 @@ def loop_monitoreo():
                     mejores.append(r)
                     print(f"  {asset}: {r['margen']:+.2f}%", flush=True)
                 time.sleep(0.5)
+
+            if not activo:
+                time.sleep(60)
+                continue
 
             if mejores:
                 mejores.sort(key=lambda x: x["margen"], reverse=True)
@@ -523,7 +554,10 @@ if __name__ == "__main__":
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
         time.sleep(2)
-        enviar_menu(texto=f"\U0001F4E1 *Bot P2P Iniciado*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%")
+        extra = ""
+        if not en_horario():
+            extra = "\n\U0001F634 Modo silencioso (12AM - 7AM)"
+        enviar_menu(texto=f"\U0001F4E1 *Bot P2P Iniciado*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%{extra}")
 
     try:
         loop_monitoreo()
