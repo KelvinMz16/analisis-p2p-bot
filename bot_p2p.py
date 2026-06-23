@@ -145,12 +145,15 @@ def _api_call(method, data=None, timeout=15):
     if USE_PROXY:
         proxy_url = f"{API_URL}/{method}"
         result, error = _try_url(method, "Proxy", proxy_url, data, timeout)
-        if result and result.get("ok"):
-            return result
-        direct_url = f"{_DIRECT_API_BASE}/{method}"
-        result, error = _try_url(method, "Direct", direct_url, data, timeout)
+        # Usar respuesta del proxy siempre que haya respuesta (incluso ok=false)
+        # Solo intentar directo si el proxy no respondio (timeout/connection error)
         if result:
             return result
+        if error:
+            direct_url = f"{_DIRECT_API_BASE}/{method}"
+            result, error = _try_url(method, "Direct", direct_url, data, timeout)
+            if result:
+                return result
     else:
         direct_url = f"{_DIRECT_API_BASE}/{method}"
         result, error = _try_url(method, "Direct", direct_url, data, timeout)
