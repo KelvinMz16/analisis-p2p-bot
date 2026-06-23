@@ -83,54 +83,84 @@ _sesion.headers.update({
 # ============================================================
 # FUNCIONES TELEGRAM
 # ============================================================
+def _raw_ssl_post(url, json_data, timeout=60):
+    """Fallback raw HTTP client para bypassear errores SSL de urllib3."""
+    import http.client
+    import urllib.parse
+    ctx = ssl_mod.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl_mod.CERT_NONE
+    try:
+        ctx.minimum_version = ssl_mod.TLSVersion.TLSv1_2
+    except AttributeError:
+        pass
+    try:
+        ctx.set_ciphers('DEFAULT:@SECLEVEL=0')
+    except ssl_mod.SSLError:
+        pass
+    parsed = urllib.parse.urlparse(url)
+    body = json.dumps(json_data).encode()
+    headers = {'Content-Type': 'application/json'}
+    conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, context=ctx, timeout=timeout)
+    try:
+        conn.request("POST", parsed.path, body=body, headers=headers)
+        resp = conn.getresponse()
+        return json.loads(resp.read())
+    finally:
+        conn.close()
+
+
+# Construir URLs para proxy (HTTP) y directa (HTTPS)
+_DIRECT_BASE = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+_PROXY_HTTP = (CF_PROXY.replace("https://", "http://") if CF_PROXY else "") if USE_PROXY else ""
+
+
 def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
 
-    api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}"
-
-    def _do_request(url, payload_dict, _verify=True, _timeout=60):
+    # Estrategia 1: Proxy via HTTP (evita SSL handshake failures)
+    if _PROXY_HTTP:
+        proxy_url = f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/{method}"
         try:
-            if payload_dict is not None:
-                r = requests.post(url, json=payload_dict, timeout=_timeout, verify=_verify)
-            else:
-                r = requests.get(url, params=params, timeout=_timeout, verify=_verify)
+            r = requests.post(proxy_url, json=payload, timeout=30)
             if r.status_code == 400 and ignore_400:
                 return None
             r.raise_for_status()
             return r.json()
-        except requests.exceptions.SSLError:
-            raise
         except Exception:
-            return None
+            pass
 
-    # Intento 1: directo con verify=True, timeout 60s
+    # Estrategia 2: Directo HTTPS con verify=True
+    direct_url = f"{_DIRECT_BASE}/{method}"
     try:
-        result = _do_request(api_url, payload, _verify=True, _timeout=60)
-        if result is not None:
-            return result
+        r = requests.post(direct_url, json=payload, timeout=60)
+        if r.status_code == 400 and ignore_400:
+            return None
+        r.raise_for_status()
+        return r.json()
     except requests.exceptions.SSLError:
         pass
-
-    # Intento 2: SSL falló, reintentar con verify=False, timeout 60s
-    try:
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        result = _do_request(api_url, payload, _verify=False, _timeout=60)
-        if result is not None:
-            return result
-    except:
+    except Exception:
         pass
 
-    # Intento 3: timeout largo sin verify (120s)
+    # Estrategia 3: Directo sin verify SSL
     try:
-        result = _do_request(api_url, payload, _verify=False, _timeout=120)
-        if result is not None:
-            return result
-    except:
+        r = requests.post(direct_url, json=payload, timeout=60, verify=False)
+        if r.status_code == 400 and ignore_400:
+            return None
+        r.raise_for_status()
+        return r.json()
+    except Exception:
         pass
 
-    print(f"TG {method}: No se pudo conectar (3 intentos)", flush=True)
+    # Estrategia 4: Raw http.client (bypasses urllib3 completamente)
+    try:
+        return _raw_ssl_post(direct_url, payload, timeout=60)
+    except Exception:
+        pass
+
+    print(f"TG {method}: No se pudo conectar", flush=True)
     return None
 
 
@@ -289,18 +319,27 @@ def procesar_callback(cq):
 
 
 def _get_updates(offset):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     payload = {"offset": offset, "timeout": 10}
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    for verify, timeout in [(True, 30), (False, 30), (False, 60)]:
+    # Proxy via HTTP
+    if _PROXY_HTTP:
         try:
-            r = requests.post(url, json=payload, timeout=timeout, verify=verify)
+            r = requests.post(f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/getUpdates", json=payload, timeout=20)
             r.raise_for_status()
             return r.json().get("result", [])
         except:
             pass
+
+    # Directo HTTPS
+    url = f"{_DIRECT_BASE}/getUpdates"
+    for verify in [True, False]:
+        try:
+            r = requests.post(url, json=payload, timeout=30, verify=verify)
+            r.raise_for_status()
+            return r.json().get("result", [])
+        except:
+            pass
+
     return []
 
 
