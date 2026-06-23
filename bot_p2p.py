@@ -85,24 +85,30 @@ def monitorear_usdt():
     if r is None:
         print("No se pudieron obtener tasas. Reintentando en 60s...")
         return
-    print(f"Compra Maker: {r['compra']:.2f} VES | "
-          f"Venta Maker: {r['venta']:.2f} VES | "
-          f"Margen Neto: {r['margen']:.2f}%  "
-          f"[{'+' if r['ganancia_usd'] >= 0 else ''}{r['ganancia_usd']:.2f} USD]")
 
-    if r["margen"] >= CONFIG["margen_objetivo"]:
-        print("=" * 60)
-        print(f"  >>>  OPORTUNIDAD DETECTADA  <<<")
-        print(f"  Margen:  {r['margen']:.2f}%  |  Ganancia: ${r['ganancia_usd']:.2f}")
-        print(f"  Compra:  {r['compra']:.2f} VES")
-        print(f"  Venta:   {r['venta']:.2f} VES")
-        print("=" * 60)
+    compra = r["compra"]
+    venta = r["venta"]
+    margen = r["margen"]
+    ganancia_usd = r["ganancia_usd"]
+
+    # Ahorro al comprar como Maker vs comprar directo de anuncios SELL
+    # (La tasa SELL es lo que pagarias comprando de anuncios existentes)
+    ahorro_compra = ((venta - compra) / venta) * 100 if venta > 0 else 0
+
+    print("=" * 55)
+    print(f"  USDT/VES  -  Capital: ${CONFIG['capital']}")
+    print(f"  Compra Maker: {compra:.2f} VES  (ahorras {ahorro_compra:.2f}% vs comprar directo)")
+    print(f"  Venta Maker:  {venta:.2f} VES  (ganas {margen:.2f}% = ${ganancia_usd:.2f} por ${CONFIG['capital']})")
+    print("=" * 55)
+
+    if margen >= CONFIG["margen_objetivo"]:
+        print("  >>>  OPORTUNIDAD DETECTADA  <<<")
         enviar_telegram(
             f"\U0001F514 *ALERTA P2P - Oportunidad USDT*\n"
-            f"Margen: {r['margen']:.2f}%\n"
-            f"Compra: {r['compra']:.2f} VES\n"
-            f"Venta:  {r['venta']:.2f} VES\n"
-            f"Ganancia: ${r['ganancia_usd']:.2f}"
+            f"Compra Maker: {compra:.2f} VES\n"
+            f"Venta Maker:  {venta:.2f} VES\n"
+            f"Margen: {margen:.2f}%\n"
+            f"Ganancia: ${ganancia_usd:.2f} por ${CONFIG['capital']}"
         )
 # ============================================================
 
@@ -154,11 +160,13 @@ def procesar_comando(texto, chat_id):
     elif cmd == "/precio":
         r = calcular_margen("USDT")
         if r:
+            ahorro = ((r['venta'] - r['compra']) / r['venta']) * 100
             enviar_telegram(
                 f"*USDT / VES*\n"
-                f"Compra: {r['compra']:.2f}\n"
-                f"Venta:  {r['venta']:.2f}\n"
-                f"Margen: {r['margen']:.2f}%",
+                f"Compra Maker: {r['compra']:.2f} (ahorras {ahorro:.2f}%)\n"
+                f"Venta Maker:  {r['venta']:.2f}\n"
+                f"Margen neto: {r['margen']:.2f}%\n"
+                f"Ganancia: ${r['ganancia_usd']:.2f} por ${CONFIG['capital']}",
                 chat_id
             )
         else:
