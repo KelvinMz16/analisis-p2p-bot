@@ -9,12 +9,30 @@ import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ============================================================
-# CONFIGURACION
+# CONFIGURACION (persistente via HF Secrets)
 # ============================================================
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+NAMESPACE = "KelvinMz/VesArbitrajeP2P"
+
 CONFIG = {
-    "capital": 100,
+    "capital": int(float(os.getenv("CAPITAL", "100"))),
     "margen_objetivo": 0.8,
 }
+
+
+def guardar_capital():
+    """Persiste el capital en HF Secrets para que sobreviva a reinicios."""
+    if not HF_TOKEN:
+        return
+    try:
+        requests.post(
+            f"https://huggingface.co/api/spaces/{NAMESPACE}/secrets",
+            headers={"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"},
+            json={"key": "CAPITAL", "value": str(int(CONFIG["capital"]))},
+            timeout=10
+        )
+    except Exception as e:
+        print(f"Error guardando capital: {e}", flush=True)
 
 COMISION = 0.0025
 ULTIMOS = {}
@@ -69,46 +87,50 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
     if not TELEGRAM_TOKEN:
         return None
 
-    # Probar primero directo a Telegram (timeout largo)
-    url_direct = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}"
-    try:
-        ctx = ssl_mod.create_default_context()
-        if payload is not None:
-            data = json.dumps(payload).encode()
-            req = urllib.request.Request(url_direct, data=data, headers={"Content-Type": "application/json"}, method="POST")
-        else:
-            req = urllib.request.Request(url_direct, method="GET")
-        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
-            if resp.status == 400 and ignore_400:
-                return None
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 400 and ignore_400:
-            return None
-        print(f"TG directo HTTP {e.code}: {e.reason}", flush=True)
-    except Exception as e:
-        print(f"TG directo: {e}", flush=True)
+    api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}"
 
-    # Fallback: via Cloudflare Worker
-    if CF_PROXY and USE_PROXY:
-        url_proxy = f"{CF_PROXY}/telegram-api/{TELEGRAM_TOKEN}/{method}"
+    def _do_request(url, payload_dict, _verify=True, _timeout=60):
         try:
-            ctx = ssl_mod.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl_mod.CERT_NONE
-            if payload is not None:
-                data = json.dumps(payload).encode()
-                req = urllib.request.Request(url_proxy, data=data, headers={"Content-Type": "application/json"}, method="POST")
+            if payload_dict is not None:
+                r = requests.post(url, json=payload_dict, timeout=_timeout, verify=_verify)
             else:
-                req = urllib.request.Request(url_proxy, method="GET")
-            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-                if resp.status == 400 and ignore_400:
-                    return None
-                return json.loads(resp.read())
-        except Exception as e:
-            if "400" not in str(e) or not ignore_400:
-                print(f"TG proxy: {e}", flush=True)
+                r = requests.get(url, params=params, timeout=_timeout, verify=_verify)
+            if r.status_code == 400 and ignore_400:
+                return None
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.SSLError:
+            raise
+        except Exception:
+            return None
 
+    # Intento 1: directo con verify=True, timeout 60s
+    try:
+        result = _do_request(api_url, payload, _verify=True, _timeout=60)
+        if result is not None:
+            return result
+    except requests.exceptions.SSLError:
+        pass
+
+    # Intento 2: SSL falló, reintentar con verify=False, timeout 60s
+    try:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        result = _do_request(api_url, payload, _verify=False, _timeout=60)
+        if result is not None:
+            return result
+    except:
+        pass
+
+    # Intento 3: timeout largo sin verify (120s)
+    try:
+        result = _do_request(api_url, payload, _verify=False, _timeout=120)
+        if result is not None:
+            return result
+    except:
+        pass
+
+    print(f"TG {method}: No se pudo conectar (3 intentos)", flush=True)
     return None
 
 
@@ -195,6 +217,7 @@ def procesar_mensaje(texto, chat_id):
             if nuevo > 0:
                 viejo = CONFIG["capital"]
                 CONFIG["capital"] = nuevo
+                guardar_capital()
                 enviar_menu(chat_id, f"Capital actualizado: ${viejo:.0f} -> ${nuevo:.0f}")
             else:
                 _tg_call("sendMessage", {"chat_id": chat_id, "text": "Debe ser mayor a 0."})
@@ -266,28 +289,16 @@ def procesar_callback(cq):
 
 
 def _get_updates(offset):
-    ctx = ssl_mod.create_default_context()
-    url_direct = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    data = json.dumps({"offset": offset, "timeout": 10}).encode()
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    payload = {"offset": offset, "timeout": 10}
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    # Directo primero
-    try:
-        req = urllib.request.Request(url_direct, data=data, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
-            return json.loads(r.read()).get("result", [])
-    except:
-        pass
-
-    # Proxy fallback
-    if CF_PROXY and USE_PROXY:
-        url_proxy = f"{CF_PROXY}/telegram-api/{TELEGRAM_TOKEN}/getUpdates"
+    for verify, timeout in [(True, 30), (False, 30), (False, 60)]:
         try:
-            ctx2 = ssl_mod.create_default_context()
-            ctx2.check_hostname = False
-            ctx2.verify_mode = ssl_mod.CERT_NONE
-            req = urllib.request.Request(url_proxy, data=data, headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(req, context=ctx2, timeout=15) as r:
-                return json.loads(r.read()).get("result", [])
+            r = requests.post(url, json=payload, timeout=timeout, verify=verify)
+            r.raise_for_status()
+            return r.json().get("result", [])
         except:
             pass
     return []
