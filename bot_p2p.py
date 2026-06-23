@@ -1,6 +1,8 @@
 import requests
 import time
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 # ============================================================
@@ -126,6 +128,28 @@ def enviar_alerta_telegram(margen, compra, venta, ganancia):
         r.raise_for_status()
     except Exception as e:
         print(f"Error al enviar mensaje Telegram: {e}")
+# ============================================================
+
+
+# ============================================================
+# SERVIDOR WEB (para UptimeRobot / health checks)
+# ============================================================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status": "running"}')
+
+    def log_message(self, format, *args):
+        pass  # silenciar logs del servidor
+
+def iniciar_servidor():
+    server = HTTPServer(("0.0.0.0", 7860), HealthHandler)
+    server.serve_forever()
+
+thread = threading.Thread(target=iniciar_servidor, daemon=True)
+thread.start()
 # ============================================================
 
 
