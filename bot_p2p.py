@@ -162,7 +162,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     ciclo = 0
-    enviar_telegram("\U0001F4E1 *Bot P2P Iniciado*\nMonitoreando USDT/VES cada 60s")
+    enviar_telegram(f"\U0001F4E1 *Bot P2P Iniciado*\nMonitoreando USDT/VES cada 60s\nUmbral: {MARGEN_OBJETIVO}% | Capital: ${CAPITAL_INICIAL}")
 
     while True:
         try:
