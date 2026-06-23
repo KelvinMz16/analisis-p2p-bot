@@ -16,27 +16,36 @@ NAMESPACE = "KelvinMz/VesArbitrajeP2P"
 
 CONFIG = {
     "capital": int(float(os.getenv("CAPITAL", "100"))),
-    "margen_objetivo": 0.8,
+    "margen_objetivo": float(os.getenv("UMBRAL", "0.8")),
 }
 
 
-def guardar_capital():
-    """Persiste el capital en HF Secrets para que sobreviva a reinicios."""
+def _guardar_secret(key, value):
     if not HF_TOKEN:
         return
     try:
         requests.post(
             f"https://huggingface.co/api/spaces/{NAMESPACE}/secrets",
             headers={"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"},
-            json={"key": "CAPITAL", "value": str(int(CONFIG["capital"]))},
+            json={"key": key, "value": str(value)},
             timeout=10
         )
     except Exception as e:
-        print(f"Error guardando capital: {e}", flush=True)
+        print(f"Error guardando {key}: {e}", flush=True)
+
+
+def guardar_capital():
+    _guardar_secret("CAPITAL", int(CONFIG["capital"]))
+
+
+def guardar_umbral():
+    _guardar_secret("UMBRAL", CONFIG["margen_objetivo"])
 
 COMISION = 0.0025
 ULTIMOS = {}
 ESTADOS_USUARIO = {}
+MARGE_ANTERIOR = {}  # asset -> ultimo margen, para detectar recuperacion
+ALERTA_ENVIADA = set()  # assets con alerta ya enviada en este ciclo positivo
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -168,15 +177,15 @@ def enviar_menu(chat_id=None, texto=None):
     cid = chat_id or TELEGRAM_CHAT_ID
     if not texto:
         texto = f"\U0001F916 *Bot P2P Venezuela*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%"
-    kb = json.dumps({
-        "inline_keyboard": [
-            [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
-             {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
-            [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
-             {"text": "\U0001F4CB Estado", "callback_data": "status"}],
-            [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
-        ]
-    })
+    _kb_menu = [
+        [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
+         {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
+        [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
+         {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
+        [{"text": "\U0001F4CB Estado", "callback_data": "status"},
+         {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+    ]
+    kb = json.dumps({"inline_keyboard": _kb_menu})
     _tg_call("sendMessage", {
         "chat_id": cid, "text": texto,
         "parse_mode": "Markdown", "reply_markup": kb
@@ -191,15 +200,15 @@ def responder_callback(callback_id, texto=None):
 
 
 def editar_mensaje(chat_id, message_id, texto):
-    kb = json.dumps({
-        "inline_keyboard": [
-            [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
-             {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
-            [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
-             {"text": "\U0001F4CB Estado", "callback_data": "status"}],
-            [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
-        ]
-    })
+    _kb_menu = [
+        [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
+         {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
+        [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
+         {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
+        [{"text": "\U0001F4CB Estado", "callback_data": "status"},
+         {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+    ]
+    kb = json.dumps({"inline_keyboard": _kb_menu})
     _tg_call("editMessageText", {
         "chat_id": chat_id, "message_id": message_id,
         "text": texto, "parse_mode": "Markdown", "reply_markup": kb
@@ -232,8 +241,10 @@ def calcular_margen(asset):
     ganancia_neta = (venta - compra) - (venta * COMISION) - (compra * COMISION)
     margen = (ganancia_neta / compra) * 100
     ganancia_usd = CONFIG["capital"] * (margen / 100)
+    tasa_ves = ULTIMOS.get("USDT", {}).get("venta") or None
+    ganancia_ves = (ganancia_usd * tasa_ves) if tasa_ves else None
     ULTIMOS[asset] = {"compra": compra, "venta": venta, "margen": margen}
-    return {"asset": asset, "compra": compra, "venta": venta, "margen": margen, "ganancia_usd": ganancia_usd}
+    return {"asset": asset, "compra": compra, "venta": venta, "margen": margen, "ganancia_usd": ganancia_usd, "ganancia_ves": ganancia_ves}
 # ============================================================
 
 
@@ -241,7 +252,8 @@ def calcular_margen(asset):
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
 def procesar_mensaje(texto, chat_id):
-    if chat_id in ESTADOS_USUARIO and ESTADOS_USUARIO[chat_id].get("esperando") == "capital":
+    estado = ESTADOS_USUARIO.get(chat_id, {})
+    if estado.get("esperando") == "capital":
         try:
             nuevo = float(texto.strip())
             if nuevo > 0:
@@ -253,8 +265,22 @@ def procesar_mensaje(texto, chat_id):
                 _tg_call("sendMessage", {"chat_id": chat_id, "text": "Debe ser mayor a 0."})
         except ValueError:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un numero, ej: 150"})
-        finally:
-            ESTADOS_USUARIO.pop(chat_id, None)
+        ESTADOS_USUARIO.pop(chat_id, None)
+        return
+    elif estado.get("esperando") == "umbral":
+        try:
+            nuevo = float(texto.strip())
+            if 0 < nuevo <= 100:
+                viejo = CONFIG["margen_objetivo"]
+                CONFIG["margen_objetivo"] = nuevo
+                guardar_umbral()
+                ALERTA_ENVIADA.clear()
+                enviar_menu(chat_id, f"Umbral actualizado: {viejo:.1f}% -> {nuevo:.1f}%")
+            else:
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": "Debe estar entre 0 y 100."})
+        except ValueError:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un numero, ej: 1.5"})
+        ESTADOS_USUARIO.pop(chat_id, None)
         return
     enviar_menu(chat_id)
 
@@ -264,6 +290,12 @@ def procesar_callback(cq):
     msg_id = cq["message"]["message_id"]
     data = cq["data"]
     responder_callback(cq["id"])
+
+    def _linea_ganancia(r):
+        v = f"${r['ganancia_usd']:.2f} USD"
+        if r.get('ganancia_ves'):
+            v += f" | Bs.{r['ganancia_ves']:.2f}"
+        return v
 
     if data == "precio":
         r = calcular_margen("USDT")
@@ -275,7 +307,7 @@ def procesar_callback(cq):
                 f"Compra: {r['compra']:.2f} VES (desc. {desc:.1f}%)\n"
                 f"Venta:  {r['venta']:.2f} VES (prima {pri:.1f}%)\n"
                 f"Margen: {r['margen']:.2f}%\n"
-                f"Ganancia: ${r['ganancia_usd']:.2f} \u00d7 ${CONFIG['capital']}"
+                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']}"
             )
         else:
             editar_mensaje(chat_id, msg_id, "No se pudieron obtener precios.")
@@ -349,9 +381,16 @@ def procesar_callback(cq):
                 f"Desc. compra: {descuento:.1f}%\n"
                 f"Prima venta: {prima:.1f}%\n"
                 f"Margen neto: {r['margen']:+.2f}%\n"
-                f"Ganancia: ${r['ganancia_usd']:.2f} \u00d7 ${CONFIG['capital']}"
+                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']}"
             ),
             "parse_mode": "Markdown", "reply_markup": kb
+        })
+
+    elif data == "umbral":
+        ESTADOS_USUARIO[chat_id] = {"esperando": "umbral"}
+        _tg_call("sendMessage", {
+            "chat_id": chat_id,
+            "text": f"\U0001F3AF Umbral actual: {CONFIG['margen_objetivo']}%\nResponde con el nuevo umbral (ej: 1.0 para 1%):"
         })
 
     elif data == "capital":
@@ -362,13 +401,12 @@ def procesar_callback(cq):
         })
 
     elif data == "status":
-        u = ULTIMOS.get("USDT", {})
-        editar_mensaje(chat_id, msg_id,
-            f"\U0001F4CB *Estado*\nCapital: ${CONFIG['capital']}\n"
-            f"Umbral: {CONFIG['margen_objetivo']}%\n"
-            f"USDT: {u.get('margen', 'N/A'):.2f}%\n"
-            f"C {u.get('compra', 'N/A')} | V {u.get('venta', 'N/A')}"
-        )
+        lines = [f"\U0001F4CB *Estado*\nCapital: ${CONFIG['capital']}\nUmbral: {CONFIG['margen_objetivo']}%"]
+        for a in ASSETS_VES:
+            u = ULTIMOS.get(a)
+            if u:
+                lines.append(f"{a}: {u['margen']:+.2f}%")
+        editar_mensaje(chat_id, msg_id, "\n".join(lines))
 
     elif data == "menu":
         editar_mensaje(chat_id, msg_id,
@@ -450,8 +488,26 @@ def loop_monitoreo():
             if mejores:
                 mejores.sort(key=lambda x: x["margen"], reverse=True)
                 top = mejores[0]
+                ganancia_ves_top = ""
+                if top.get("ganancia_ves"):
+                    ganancia_ves_top = f" | Bs.{top['ganancia_ves']:.2f}"
 
-                if top["margen"] >= CONFIG["margen_objetivo"]:
+                for r in mejores:
+                    ant = MARGE_ANTERIOR.get(r["asset"])
+                    MARGE_ANTERIOR[r["asset"]] = r["margen"]
+                    if ant is not None and ant < 0 <= r["margen"]:
+                        _tg_call("sendMessage", {
+                            "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                            "text": (
+                                f"\U0001F7E2 *RECUPERACION* {r['asset']}\n"
+                                f"Margen pas\u00f3 de {ant:+.2f}% a {r['margen']:+.2f}%\n"
+                                f"Compra: {r['compra']:.2f} VES\n"
+                                f"Venta:  {r['venta']:.2f} VES"
+                            )
+                        })
+
+                if top["margen"] >= CONFIG["margen_objetivo"] and top["asset"] not in ALERTA_ENVIADA:
+                    ALERTA_ENVIADA.add(top["asset"])
                     print(f">>> OPORTUNIDAD {top['asset']} <<<", flush=True)
                     _tg_call("sendMessage", {
                         "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
@@ -460,9 +516,11 @@ def loop_monitoreo():
                             f"\U0001F3C6 {top['asset']} | Margen: {top['margen']:+.2f}%\n"
                             f"Compra: {top['compra']:.2f} VES\n"
                             f"Venta:  {top['venta']:.2f} VES\n"
-                            f"Ganancia: ${top['ganancia_usd']:.2f} \u00d7 ${CONFIG['capital']}"
+                            f"Ganancia: ${top['ganancia_usd']:.2f}{ganancia_ves_top} \u00d7 ${CONFIG['capital']}"
                         )
                     })
+                elif top["margen"] < CONFIG["margen_objetivo"]:
+                    ALERTA_ENVIADA.discard(top["asset"])
 
             ciclo += 1
             if ciclo % 30 == 0 and mejores:
