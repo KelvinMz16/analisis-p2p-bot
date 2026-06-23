@@ -109,7 +109,7 @@ def _raw_ssl_post(url, json_data, timeout=60):
         pass
     parsed = urllib.parse.urlparse(url)
     body = json.dumps(json_data).encode()
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/json', 'Content-Length': str(len(body))}
     conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, context=ctx, timeout=timeout)
     try:
         conn.request("POST", parsed.path, body=body, headers=headers)
@@ -132,7 +132,7 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
 
     def _try_req(label, url, extra=None):
         try:
-            kw = {"json": payload, "timeout": 60}
+            kw = {"json": payload, "timeout": 30}
             if extra:
                 kw.update(extra)
             r = requests.post(url, **kw)
@@ -150,20 +150,20 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
         if r:
             return r
 
-    # 2: Raw http.client SSL (mas confiable en HF)
+    # 2: Direct HTTPS verify=False
+    r = _try_req("req", direct_url, {"verify": False})
+    if r:
+        return r
+
+    # 3: Raw http.client SSL (ultimo recurso)
     try:
-        result = _raw_ssl_post(direct_url, payload, timeout=60)
+        result = _raw_ssl_post(direct_url, payload, timeout=30)
         if result is not None:
             if ignore_400 and not result.get("ok") and result.get("error_code") == 400:
                 return None
             return result
     except Exception as ex:
         print(f"  tg/{method} raw: {type(ex).__name__}", flush=True)
-
-    # 3: requests verify=False
-    r = _try_req("req", direct_url, {"verify": False})
-    if r:
-        return r
 
     print(f"  ! tg/{method}: todas fallaron", flush=True)
     return None
@@ -413,29 +413,30 @@ def procesar_callback(cq):
 def _get_updates(offset):
     payload = {"offset": offset, "timeout": 10}
 
-    # Estrategia 1: Proxy via HTTP (evita SSL local)
+    direct_url = f"{_DIRECT_BASE}/getUpdates"
+
+    # Estrategia 1: Proxy via HTTP
     if _PROXY_HTTP:
         try:
-            r = requests.post(f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/getUpdates", json=payload, timeout=25)
+            r = requests.post(f"{_PROXY_HTTP}/telegram-api/{TELEGRAM_TOKEN}/getUpdates", json=payload, timeout=20)
             r.raise_for_status()
             return r.json().get("result", [])
         except Exception as ex:
-            print(f"  getUpdates proxy: {type(ex).__name__}", flush=True)
+            print(f"  gU proxy: {type(ex).__name__}", flush=True)
 
-    # Estrategia 2: Raw http.client (bypasses urllib3 completamente)
-    direct_url = f"{_DIRECT_BASE}/getUpdates"
+    # Estrategia 2: requests verify=False
     try:
-        return _raw_ssl_post(direct_url, payload, timeout=25).get("result", [])
-    except Exception as ex:
-        print(f"  getUpdates raw: {type(ex).__name__}", flush=True)
-
-    # Estrategia 3: requests con verify=False
-    try:
-        r = requests.post(direct_url, json=payload, timeout=25, verify=False)
+        r = requests.post(direct_url, json=payload, timeout=20, verify=False)
         r.raise_for_status()
         return r.json().get("result", [])
     except Exception as ex:
-        print(f"  getUpdates req: {type(ex).__name__}", flush=True)
+        print(f"  gU req: {type(ex).__name__}", flush=True)
+
+    # Estrategia 3: Raw http.client
+    try:
+        return _raw_ssl_post(direct_url, payload, timeout=20).get("result", [])
+    except Exception as ex:
+        print(f"  gU raw: {type(ex).__name__}", flush=True)
 
     print("  ! getUpdates: todas fallaron", flush=True)
     return []
