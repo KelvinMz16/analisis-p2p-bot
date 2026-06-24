@@ -261,17 +261,20 @@ def obtener_precio_p2p(trade_type, asset="USDT"):
 
 
 def calcular_margen(asset):
-    compra = obtener_precio_p2p("BUY", asset)
-    venta = obtener_precio_p2p("SELL", asset)
-    if compra is None or venta is None:
+    # En Binance P2P:
+    # - "BUY" retorna anuncios de venta (donde el Maker vende, o sea, precio de venta del Maker).
+    # - "SELL" retorna anuncios de compra (donde el Maker compra, o sea, precio de compra del Maker).
+    maker_venta = obtener_precio_p2p("BUY", asset)   # Precio de venta (alto)
+    maker_compra = obtener_precio_p2p("SELL", asset) # Precio de compra (bajo)
+    if maker_venta is None or maker_compra is None:
         return None
-    ganancia_neta = (venta - compra) - (venta * COMISION) - (compra * COMISION)
-    margen = (ganancia_neta / compra) * 100
+    ganancia_neta = (maker_venta - maker_compra) - (maker_venta * COMISION) - (maker_compra * COMISION)
+    margen = (ganancia_neta / maker_compra) * 100
     ganancia_usd = CONFIG["capital"] * (margen / 100)
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta") or None
     ganancia_ves = (ganancia_usd * tasa_ves) if tasa_ves else None
-    ULTIMOS[asset] = {"compra": compra, "venta": venta, "margen": margen}
-    return {"asset": asset, "compra": compra, "venta": venta, "margen": margen, "ganancia_usd": ganancia_usd, "ganancia_ves": ganancia_ves}
+    ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": margen}
+    return {"asset": asset, "compra": maker_compra, "venta": maker_venta, "margen": margen, "ganancia_usd": ganancia_usd, "ganancia_ves": ganancia_ves}
 # ============================================================
 
 
