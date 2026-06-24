@@ -32,7 +32,22 @@ _config_local = cargar_config_local()
 CONFIG = {
     "capital": float(_config_local.get("capital", os.getenv("CAPITAL", "100"))),
     "margen_objetivo": float(_config_local.get("margen_objetivo", os.getenv("UMBRAL", "0.8"))),
+    "monto_filtro": int(_config_local.get("monto_filtro", 0)),
 }
+
+# Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10
+FILTROS_MONTO = [0, 4000, 8000]
+
+
+def nombre_filtro(valor=None):
+    v = valor if valor is not None else CONFIG["monto_filtro"]
+    if v == 0:
+        return "Mayorista"
+    elif v == 4000:
+        return "$5 (4K Bs)"
+    elif v == 8000:
+        return "$10 (8K Bs)"
+    return f"{v} Bs"
 
 
 def guardar_config_local():
@@ -50,7 +65,9 @@ def guardar_capital():
 def guardar_umbral():
     guardar_config_local()
 
-COMISION = 0.0025
+COMISION = 0.0025          # 0.25% Binance Maker
+COMISION_BANCO = 0.003     # 0.30% Pago Movil BDV
+COMISION_TOTAL = COMISION * 2 + COMISION_BANCO  # 0.25% compra + 0.25% venta + 0.30% banco = 0.80%
 ULTIMOS = {}
 ESTADOS_USUARIO = {}
 MARGE_ANTERIOR = {}  # asset -> ultimo margen, para detectar recuperacion
@@ -64,7 +81,7 @@ HEADERS = {
 }
 
 URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-ASSETS_VES = ["USDT", "BTC", "ETH", "BNB", "USDC", "SOL"]
+ASSETS_VES = ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]
 HISTORIAL_PATH = "historial_precios.jsonl"
 
 VENEZUELA_TZ = timezone(timedelta(hours=-4))
@@ -191,20 +208,28 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
     return result
 
 
+def _construir_teclado():
+    return [
+        [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
+         {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
+        [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']:.0f})", "callback_data": "capital"},
+         {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
+        [{"text": f"\U0001F6D2 Filtro: {nombre_filtro()}", "callback_data": "ciclo_filtro"},
+         {"text": "\U0001F4CB Estado", "callback_data": "status"}],
+        [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
+         {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+    ]
+
+
 def enviar_menu(chat_id=None, texto=None):
     cid = chat_id or TELEGRAM_CHAT_ID
     if not texto:
-        texto = f"\U0001F916 *Bot P2P Venezuela*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%"
-    _kb_menu = [
-        [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
-         {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
-        [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
-         {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
-        [{"text": "\U0001F4CB Estado", "callback_data": "status"},
-         {"text": "\U0001F4C5 Historial", "callback_data": "historial"}],
-        [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
-    ]
-    kb = json.dumps({"inline_keyboard": _kb_menu})
+        texto = (
+            f"\U0001F916 *Bot P2P Venezuela*\n"
+            f"Capital: ${CONFIG['capital']:.0f} | Umbral: {CONFIG['margen_objetivo']}%\n"
+            f"Filtro: {nombre_filtro()} | Comisiones: {COMISION_TOTAL*100:.2f}%"
+        )
+    kb = json.dumps({"inline_keyboard": _construir_teclado()})
     _tg_call("sendMessage", {
         "chat_id": cid, "text": texto,
         "parse_mode": "Markdown", "reply_markup": kb
@@ -219,16 +244,7 @@ def responder_callback(callback_id, texto=None):
 
 
 def editar_mensaje(chat_id, message_id, texto):
-    _kb_menu = [
-        [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
-         {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
-        [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
-         {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
-        [{"text": "\U0001F4CB Estado", "callback_data": "status"},
-         {"text": "\U0001F4C5 Historial", "callback_data": "historial"}],
-        [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
-    ]
-    kb = json.dumps({"inline_keyboard": _kb_menu})
+    kb = json.dumps({"inline_keyboard": _construir_teclado()})
     _tg_call("editMessageText", {
         "chat_id": chat_id, "message_id": message_id,
         "text": texto, "parse_mode": "Markdown", "reply_markup": kb
@@ -239,7 +255,7 @@ def editar_mensaje(chat_id, message_id, texto):
 # ============================================================
 # API BINANCE P2P
 # ============================================================
-def obtener_precio_p2p(trade_type, asset="USDT"):
+def obtener_precio_p2p(trade_type, asset="USDT", trans_amount=0):
     payload = {
         "asset": asset,
         "fiat": "VES",
@@ -248,33 +264,46 @@ def obtener_precio_p2p(trade_type, asset="USDT"):
         "tradeType": trade_type,
         "payTypes": ["BancoDeVenezuela", "PagoMovil"]
     }
+    if trans_amount > 0:
+        payload["transAmount"] = str(trans_amount)
     try:
         resp = requests.post(URL_BINANCE, json=payload, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         anuncios = resp.json().get("data", [])
-        if len(anuncios) < 5:
+        if len(anuncios) < 3:
             return None
-        return sum(float(anuncios[i]["adv"]["price"]) for i in range(2, 5)) / 3
+        # Promedio posiciones 3-5 si hay suficientes, sino promedia lo disponible
+        start = min(2, len(anuncios) - 1)
+        end = min(5, len(anuncios))
+        precios = [float(anuncios[i]["adv"]["price"]) for i in range(start, end)]
+        return sum(precios) / len(precios) if precios else None
     except Exception as e:
         print(f"[{asset}/{trade_type}] Error: {e}", flush=True)
         return None
 
 
-def calcular_margen(asset):
+def calcular_margen(asset, trans_amount=None):
     # En Binance P2P:
-    # - "BUY" retorna anuncios de venta (donde el Maker vende, o sea, precio de venta del Maker).
-    # - "SELL" retorna anuncios de compra (donde el Maker compra, o sea, precio de compra del Maker).
-    maker_venta = obtener_precio_p2p("BUY", asset)   # Precio de venta (alto)
-    maker_compra = obtener_precio_p2p("SELL", asset) # Precio de compra (bajo)
+    # - "BUY" retorna anuncios donde Makers VENDEN (precio alto para el Taker que compra).
+    # - "SELL" retorna anuncios donde Makers COMPRAN (precio bajo para el Taker que vende).
+    # Para un Maker: compras barato (apareces en SELL) y vendes caro (apareces en BUY).
+    monto = trans_amount if trans_amount is not None else CONFIG["monto_filtro"]
+    maker_venta = obtener_precio_p2p("BUY", asset, monto)   # Precio de venta Maker (alto)
+    maker_compra = obtener_precio_p2p("SELL", asset, monto)  # Precio de compra Maker (bajo)
     if maker_venta is None or maker_compra is None:
         return None
-    ganancia_neta = (maker_venta - maker_compra) - (maker_venta * COMISION) - (maker_compra * COMISION)
+    # Ganancia neta = spread - comision Binance compra - comision Binance venta - comision banco
+    ganancia_neta = (maker_venta - maker_compra) - (maker_compra * COMISION) - (maker_venta * COMISION) - (maker_compra * COMISION_BANCO)
     margen = (ganancia_neta / maker_compra) * 100
     ganancia_usd = CONFIG["capital"] * (margen / 100)
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta") or None
     ganancia_ves = (ganancia_usd * tasa_ves) if tasa_ves else None
     ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": margen}
-    return {"asset": asset, "compra": maker_compra, "venta": maker_venta, "margen": margen, "ganancia_usd": ganancia_usd, "ganancia_ves": ganancia_ves}
+    return {
+        "asset": asset, "compra": maker_compra, "venta": maker_venta,
+        "margen": margen, "ganancia_usd": ganancia_usd, "ganancia_ves": ganancia_ves,
+        "filtro": nombre_filtro(monto)
+    }
 # ============================================================
 
 
@@ -332,12 +361,15 @@ def procesar_callback(cq):
         if r:
             desc = ((r['venta'] - r['compra']) / r['venta']) * 100
             pri = ((r['venta'] - r['compra']) / r['compra']) * 100
+            rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
             editar_mensaje(chat_id, msg_id,
-                f"\U0001F4B0 *USDT / VES*\n"
-                f"Compra: {r['compra']:.2f} VES (desc. {desc:.1f}%)\n"
-                f"Venta:  {r['venta']:.2f} VES (prima {pri:.1f}%)\n"
-                f"Margen: {r['margen']:.2f}%\n"
-                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']}"
+                f"\U0001F4B0 *USDT / VES* ({r['filtro']})\n"
+                f"Compra Maker: {r['compra']:.2f} VES\n"
+                f"Venta Maker:  {r['venta']:.2f} VES\n"
+                f"Spread bruto: {pri:.2f}%\n"
+                f"Comisiones: -{COMISION_TOTAL*100:.2f}%\n"
+                f"*Margen neto: {r['margen']:+.2f}%* {rentable}\n"
+                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}"
             )
         else:
             editar_mensaje(chat_id, msg_id, "No se pudieron obtener precios.")
@@ -356,24 +388,30 @@ def procesar_callback(cq):
 
         best = resultados[0]
         worst = resultados[-1] if len(resultados) > 1 else best
-
-        # Señales independientes de compra y venta
-        mejor_compra = min(resultados, key=lambda x: x['compra'])
-        mejor_venta = max(resultados, key=lambda x: x['venta'])
+        rentables = [r for r in resultados if r['margen'] > 0]
 
         texto = (
-            f"\U0001F4CA *Multi-cripto*\n"
-            f"\U0001F3C6 *Mejor margen:* {best['asset']} ({best['margen']:+.2f}%)\n"
-            f"\U0001F4E5 *COMPRAR {mejor_compra['asset']} a:* {mejor_compra['compra']:.2f} VES\n"
-            f"\U0001F4E4 *VENDER {mejor_venta['asset']} a:* {mejor_venta['venta']:.2f} VES\n"
-            f"\u26A0 Evitar: {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
+            f"\U0001F4CA *Multi-cripto* ({nombre_filtro()})\n"
+            f"Comisiones totales: {COMISION_TOTAL*100:.2f}%\n\n"
+        )
+        if rentables:
+            texto += f"\u2705 *{len(rentables)} RENTABLE(S):*\n"
+            for r in rentables:
+                texto += f"  {r['asset']}: {r['margen']:+.2f}% (${r['ganancia_usd']:.2f})\n"
+        else:
+            texto += "\u274C *Ninguno rentable ahora*\n"
+
+        texto += (
+            f"\n\U0001F3C6 *Mejor:* {best['asset']} ({best['margen']:+.2f}%)\n"
+            f"\u26A0 *Peor:* {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
             f"Selecciona para detalle:\n"
         )
         kb = {"inline_keyboard": []}
         for r in resultados:
-            label = f"{r['asset']} ({r['margen']:+.2f}%)"
+            icono = "\u2705" if r['margen'] > 0 else "\u274C"
+            label = f"{icono} {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
             if r == best:
-                label = f"\U0001F3C6 {r['asset']} ({r['margen']:+.2f}%)"
+                label = f"\U0001F3C6 {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
             kb["inline_keyboard"].append([
                 {"text": label, "callback_data": f"detalle_{r['asset']}"}
             ])
@@ -390,8 +428,8 @@ def procesar_callback(cq):
         if not r:
             editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
             return
-        descuento = ((r['venta'] - r['compra']) / r['venta']) * 100
-        prima = ((r['venta'] - r['compra']) / r['compra']) * 100
+        spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
+        rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
         best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
         estrella = " \U0001F3C6" if asset == best_asset else ""
         kb = json.dumps({
@@ -403,13 +441,13 @@ def procesar_callback(cq):
         _tg_call("editMessageText", {
             "chat_id": chat_id, "message_id": msg_id,
             "text": (
-                f"\U0001F4B0 *{asset} / VES*{estrella}\n"
-                f"Compra: {r['compra']:.2f} VES\n"
-                f"Venta:   {r['venta']:.2f} VES\n"
-                f"Desc. compra: {descuento:.1f}%\n"
-                f"Prima venta: {prima:.1f}%\n"
-                f"Margen neto: {r['margen']:+.2f}%\n"
-                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']}"
+                f"\U0001F4B0 *{asset} / VES*{estrella} ({r['filtro']})\n"
+                f"Compra Maker: {r['compra']:.2f} VES\n"
+                f"Venta Maker:  {r['venta']:.2f} VES\n"
+                f"Spread bruto: {spread_bruto:.2f}%\n"
+                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n"
+                f"*Margen neto: {r['margen']:+.2f}%* {rentable}\n"
+                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}"
             ),
             "parse_mode": "Markdown", "reply_markup": kb
         })
@@ -488,17 +526,47 @@ def procesar_callback(cq):
             print(f"Error procesando historial: {e}", flush=True)
             editar_mensaje(chat_id, msg_id, "Error al procesar el historial.")
 
+    elif data == "ciclo_filtro":
+        idx_actual = FILTROS_MONTO.index(CONFIG["monto_filtro"]) if CONFIG["monto_filtro"] in FILTROS_MONTO else 0
+        idx_nuevo = (idx_actual + 1) % len(FILTROS_MONTO)
+        viejo = nombre_filtro()
+        CONFIG["monto_filtro"] = FILTROS_MONTO[idx_nuevo]
+        guardar_config_local()
+        ALERTA_ENVIADA.clear()
+        editar_mensaje(chat_id, msg_id,
+            f"\U0001F6D2 *Filtro actualizado*\n"
+            f"{viejo} \u27A1 {nombre_filtro()}\n\n"
+            f"El bot ahora calcula precios para ordenes de *{nombre_filtro()}*.\n"
+            f"Comisiones totales: {COMISION_TOTAL*100:.2f}%"
+        )
+
     elif data == "status":
-        lines = [f"\U0001F4CB *Estado*\nCapital: ${CONFIG['capital']}\nUmbral: {CONFIG['margen_objetivo']}%"]
+        lines = [
+            f"\U0001F4CB *Estado*",
+            f"Capital: ${CONFIG['capital']:.0f}",
+            f"Umbral: {CONFIG['margen_objetivo']}%",
+            f"Filtro: {nombre_filtro()}",
+            f"Comisiones: {COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n",
+        ]
+        rentables = 0
         for a in ASSETS_VES:
             u = ULTIMOS.get(a)
             if u:
-                lines.append(f"{a}: {u['margen']:+.2f}%")
+                icono = "\u2705" if u['margen'] > 0 else "\u274C"
+                lines.append(f"{icono} {a}: {u['margen']:+.2f}%")
+                if u['margen'] > 0:
+                    rentables += 1
+        if rentables > 0:
+            lines.append(f"\n\U0001F4B0 *{rentables} activo(s) rentable(s)*")
+        else:
+            lines.append(f"\n\u23F3 Sin oportunidades ahora")
         editar_mensaje(chat_id, msg_id, "\n".join(lines))
 
     elif data == "menu":
         editar_mensaje(chat_id, msg_id,
-            f"\U0001F916 *Bot P2P Venezuela*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%"
+            f"\U0001F916 *Bot P2P Venezuela*\n"
+            f"Capital: ${CONFIG['capital']:.0f} | Umbral: {CONFIG['margen_objetivo']}%\n"
+            f"Filtro: {nombre_filtro()} | Comisiones: {COMISION_TOTAL*100:.2f}%"
         )
 
 
@@ -641,14 +709,16 @@ def loop_monitoreo():
                 if top["margen"] >= CONFIG["margen_objetivo"] and top["asset"] not in ALERTA_ENVIADA:
                     ALERTA_ENVIADA.add(top["asset"])
                     print(f">>> OPORTUNIDAD {top['asset']} <<<", flush=True)
+                    rentable_tag = "\u2705 RENTABLE" if top['margen'] > 0 else ""
                     _tg_call("sendMessage", {
                         "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
                         "text": (
-                            f"\U0001F514 *ALERTA P2P*\n"
-                            f"\U0001F3C6 {top['asset']} | Margen: {top['margen']:+.2f}%\n"
-                            f"Compra: {top['compra']:.2f} VES\n"
-                            f"Venta:  {top['venta']:.2f} VES\n"
-                            f"Ganancia: ${top['ganancia_usd']:.2f}{ganancia_ves_top} \u00d7 ${CONFIG['capital']}"
+                            f"\U0001F514 *ALERTA P2P* ({nombre_filtro()})\n"
+                            f"\U0001F3C6 {top['asset']} | Margen neto: {top['margen']:+.2f}% {rentable_tag}\n"
+                            f"Compra Maker: {top['compra']:.2f} VES\n"
+                            f"Venta Maker:  {top['venta']:.2f} VES\n"
+                            f"Comisiones: -{COMISION_TOTAL*100:.2f}%\n"
+                            f"Ganancia: ${top['ganancia_usd']:.2f}{ganancia_ves_top} \u00d7 ${CONFIG['capital']:.0f}"
                         )
                     })
                 elif top["margen"] < CONFIG["margen_objetivo"]:
