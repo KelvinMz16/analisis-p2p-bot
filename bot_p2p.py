@@ -687,12 +687,19 @@ def loop_monitoreo():
 
             if mejores:
                 mejores.sort(key=lambda x: x["margen"], reverse=True)
-                top = mejores[0]
+                
+                # Para alertas de oportunidad, filtramos solo estables (USDT, USDC)
+                estables = [r for r in mejores if r["asset"] in ["USDT", "USDC"]]
+                top = estables[0] if estables else None
+                top_general = mejores[0]
+                
                 ganancia_ves_top = ""
-                if top.get("ganancia_ves"):
+                if top and top.get("ganancia_ves"):
                     ganancia_ves_top = f" | Bs.{top['ganancia_ves']:.2f}"
 
                 for r in mejores:
+                    if r["asset"] not in ["USDT", "USDC"]:
+                        continue
                     ant = MARGE_ANTERIOR.get(r["asset"])
                     MARGE_ANTERIOR[r["asset"]] = r["margen"]
                     if ant is not None and ant < 0 <= r["margen"]:
@@ -700,13 +707,13 @@ def loop_monitoreo():
                             "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
                             "text": (
                                 f"\U0001F7E2 *RECUPERACION* {r['asset']}\n"
-                                f"Margen pas\u00f3 de {ant:+.2f}% a {r['margen']:+.2f}%\n"
+                                f"Margen pasó de {ant:+.2f}% a {r['margen']:+.2f}%\n"
                                 f"Compra: {r['compra']:.2f} VES\n"
                                 f"Venta:  {r['venta']:.2f} VES"
                             )
                         })
 
-                if top["margen"] >= CONFIG["margen_objetivo"] and top["asset"] not in ALERTA_ENVIADA:
+                if top and top["margen"] >= CONFIG["margen_objetivo"] and top["asset"] not in ALERTA_ENVIADA:
                     ALERTA_ENVIADA.add(top["asset"])
                     print(f">>> OPORTUNIDAD {top['asset']} <<<", flush=True)
                     rentable_tag = "\u2705 RENTABLE" if top['margen'] > 0 else ""
@@ -721,14 +728,14 @@ def loop_monitoreo():
                             f"Ganancia: ${top['ganancia_usd']:.2f}{ganancia_ves_top} \u00d7 ${CONFIG['capital']:.0f}"
                         )
                     })
-                elif top["margen"] < CONFIG["margen_objetivo"]:
+                elif top and top["margen"] < CONFIG["margen_objetivo"]:
                     ALERTA_ENVIADA.discard(top["asset"])
 
             ciclo += 1
             if ciclo % 30 == 0 and mejores:
                 enviar_menu(texto=(
                     f"\u23F1 *Heartbeat* - {ciclo} ciclos\n"
-                    f"\U0001F3C6 Mejor: {top['asset']} ({top['margen']:+.2f}%)"
+                    f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)"
                 ))
         except Exception as e:
             print(f"Error: {e}", flush=True)
