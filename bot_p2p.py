@@ -15,32 +15,40 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 NAMESPACE = "KelvinMz/VesArbitrajeP2P"
 
+CONFIG_PATH = "config_usuario.json"
+
+
+def cargar_config_local():
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error cargando config local: {e}", flush=True)
+    return {}
+
+
+_config_local = cargar_config_local()
 CONFIG = {
-    "capital": int(float(os.getenv("CAPITAL", "100"))),
-    "margen_objetivo": float(os.getenv("UMBRAL", "0.8")),
+    "capital": float(_config_local.get("capital", os.getenv("CAPITAL", "100"))),
+    "margen_objetivo": float(_config_local.get("margen_objetivo", os.getenv("UMBRAL", "0.8"))),
 }
 
 
-def _guardar_secret(key, value):
-    if not HF_TOKEN:
-        return
+def guardar_config_local():
     try:
-        requests.post(
-            f"https://huggingface.co/api/spaces/{NAMESPACE}/secrets",
-            headers={"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"},
-            json={"key": key, "value": str(value)},
-            timeout=10
-        )
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(CONFIG, f)
     except Exception as e:
-        print(f"Error guardando {key}: {e}", flush=True)
+        print(f"Error guardando config local: {e}", flush=True)
 
 
 def guardar_capital():
-    _guardar_secret("CAPITAL", int(CONFIG["capital"]))
+    guardar_config_local()
 
 
 def guardar_umbral():
-    _guardar_secret("UMBRAL", CONFIG["margen_objetivo"])
+    guardar_config_local()
 
 COMISION = 0.0025
 ULTIMOS = {}
@@ -232,7 +240,14 @@ def editar_mensaje(chat_id, message_id, texto):
 # API BINANCE P2P
 # ============================================================
 def obtener_precio_p2p(trade_type, asset="USDT"):
-    payload = {"asset": asset, "fiat": "VES", "page": 1, "rows": 10, "tradeType": trade_type}
+    payload = {
+        "asset": asset,
+        "fiat": "VES",
+        "page": 1,
+        "rows": 10,
+        "tradeType": trade_type,
+        "payTypes": ["BancoDeVenezuela", "PagoMovil"]
+    }
     try:
         resp = requests.post(URL_BINANCE, json=payload, headers=HEADERS, timeout=15)
         resp.raise_for_status()
@@ -412,35 +427,63 @@ def procesar_callback(cq):
 
     elif data == "historial":
         try:
+            if not os.path.exists(HISTORIAL_PATH):
+                editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
+                return
             with open(HISTORIAL_PATH) as f:
                 lineas = f.readlines()
-            total = len(lineas)
-            if total == 0:
+            if not lineas:
                 editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
-            else:
-                primera = json.loads(lineas[0])
-                ultima = json.loads(lineas[-1])
-                lines = [
-                    f"\U0001F4C5 *Historial* ({total} registros)\n",
-                    f"Desde: {primera['ts'][:19]}",
-                    f"Hasta: {ultima['ts'][:19]}\n",
-                    "*Resumen USDT*"
-                ]
-                usdt_margenes = []
-                for l in lineas:
+                return
+            
+            hoy_vet = datetime.now(VENEZUELA_TZ).date()
+            lineas_hoy = []
+            for l in lineas:
+                try:
                     d = json.loads(l)
-                    if "USDT" in d:
-                        usdt_margenes.append(d["USDT"]["margen"])
+                    dt_ts = datetime.fromisoformat(d["ts"])
+                    if dt_ts.date() == hoy_vet:
+                        lineas_hoy.append(d)
+                except Exception:
+                    continue
+            
+            total_hoy = len(lineas_hoy)
+            if total_hoy == 0:
+                editar_mensaje(chat_id, msg_id, f"Aún no hay datos históricos para hoy ({hoy_vet}).")
+            else:
+                primera = lineas_hoy[0]
+                ultima = lineas_hoy[-1]
+                lines = [
+                    f"\U0001F4C5 *Historial Hoy ({hoy_vet})*\n",
+                    f"Desde: {primera['ts'][11:19]} VET",
+                    f"Hasta: {ultima['ts'][11:19]} VET",
+                    f"Total registros: {total_hoy}\n",
+                    "*Resumen USDT de Hoy*"
+                ]
+                usdt_margenes = [r["USDT"]["margen"] for r in lineas_hoy if "USDT" in r]
                 if usdt_margenes:
                     lines.append(f"Min: {min(usdt_margenes):+.2f}%")
                     lines.append(f"Máx: {max(usdt_margenes):+.2f}%")
                     lines.append(f"Prom: {sum(usdt_margenes)/len(usdt_margenes):+.2f}%")
+                
+                activos_resumen = []
+                for asset in ASSETS_VES:
+                    if asset == "USDT":
+                        continue
+                    m_asset = [r[asset]["margen"] for r in lineas_hoy if asset in r]
+                    if m_asset:
+                        activos_resumen.append(f"{asset}: Prom {sum(m_asset)/len(m_asset):+.2f}% (Máx {max(m_asset):+.2f}%)")
+                if activos_resumen:
+                    lines.append("\n*Otros activos hoy*:")
+                    lines.extend(activos_resumen)
+
                 _tg_call("sendMessage", {
                     "chat_id": chat_id, "parse_mode": "Markdown",
                     "text": "\n".join(lines)
                 })
-        except FileNotFoundError:
-            editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
+        except Exception as e:
+            print(f"Error procesando historial: {e}", flush=True)
+            editar_mensaje(chat_id, msg_id, "Error al procesar el historial.")
 
     elif data == "status":
         lines = [f"\U0001F4CB *Estado*\nCapital: ${CONFIG['capital']}\nUmbral: {CONFIG['margen_objetivo']}%"]
@@ -545,10 +588,27 @@ def loop_monitoreo():
                 for r in mejores:
                     registro[r["asset"]] = {"compra": r["compra"], "venta": r["venta"], "margen": r["margen"]}
                 try:
-                    with open(HISTORIAL_PATH, "a") as f:
-                        f.write(json.dumps(registro) + "\n")
-                except Exception:
-                    pass
+                    # Cargar y podar registros de más de 7 días
+                    lineas = []
+                    if os.path.exists(HISTORIAL_PATH):
+                        with open(HISTORIAL_PATH, "r") as f:
+                            lineas = f.readlines()
+                    lineas.append(json.dumps(registro) + "\n")
+                    
+                    limite = datetime.now(VENEZUELA_TZ) - timedelta(days=7)
+                    lineas_filtradas = []
+                    for l in lineas:
+                        try:
+                            d = json.loads(l)
+                            dt_ts = datetime.fromisoformat(d["ts"])
+                            if dt_ts >= limite:
+                                lineas_filtradas.append(l)
+                        except Exception:
+                            continue
+                    with open(HISTORIAL_PATH, "w") as f:
+                        f.writelines(lineas_filtradas)
+                except Exception as e:
+                    print(f"Error actualizando historial: {e}", flush=True)
 
             if not activo:
                 time.sleep(60)
