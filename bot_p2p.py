@@ -35,8 +35,8 @@ CONFIG = {
     "monto_filtro": int(_config_local.get("monto_filtro", 0)),
 }
 
-# Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10
-FILTROS_MONTO = [0, 4000, 8000]
+# Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
+FILTROS_MONTO = [0, 4000, 8000, 16000]
 
 
 def nombre_filtro(valor=None):
@@ -47,6 +47,8 @@ def nombre_filtro(valor=None):
         return "$5 (4K Bs)"
     elif v == 8000:
         return "$10 (8K Bs)"
+    elif v == 16000:
+        return "$20 (16K Bs)"
     return f"{v} Bs"
 
 
@@ -721,17 +723,50 @@ def loop_monitoreo():
                     limite_anuncio = f"{CONFIG['monto_filtro']} Bs" if CONFIG['monto_filtro'] > 0 else "libre (ej. 400 Bs)"
                     ves_ganancia_str = f"Bs.{top['ganancia_ves']:.2f}" if top.get("ganancia_ves") else f"Bs.{(top['ganancia_usd'] * top['compra']):.2f}"
                     
+                    # Cómputo del escenario alternativo
+                    comparativo_str = ""
+                    maker_compra = top['compra']
+                    if CONFIG["monto_filtro"] > 0:
+                        # Filtrado fraccionado: comparar con vender todo de golpe (Mayorista)
+                        venta_may = obtener_precio_p2p("BUY", top['asset'], trans_amount=0)
+                        if venta_may:
+                            gan_net_may = (venta_may - maker_compra) - (maker_compra * COMISION) - (venta_may * COMISION) - (maker_compra * COMISION_BANCO)
+                            margen_may = (gan_net_may / maker_compra) * 100
+                            gan_usd_may = CONFIG["capital"] * (margen_may / 100)
+                            gan_ves_may = gan_usd_may * maker_compra
+                            comparativo_str = (
+                                f"\n\U0001F504 *Escenario Alternativo (Vender todo de golpe - Mayorista):*\n"
+                                f"- Vender todo a: *{venta_may:.2f} VES*\n"
+                                f"- Margen Neto: {margen_may:+.2f}%\n"
+                                f"- Ganancia Neta Total: *${gan_usd_may:.2f} USD* (~Bs.{gan_ves_may:.2f})\n"
+                            )
+                    else:
+                        # Filtrado Mayorista: comparar con vender fraccionado a $10 (8000 Bs)
+                        venta_frac = obtener_precio_p2p("BUY", top['asset'], trans_amount=8000)
+                        if venta_frac:
+                            gan_net_frac = (venta_frac - maker_compra) - (maker_compra * COMISION) - (venta_frac * COMISION) - (maker_compra * COMISION_BANCO)
+                            margen_frac = (gan_net_frac / maker_compra) * 100
+                            gan_usd_frac = CONFIG["capital"] * (margen_frac / 100)
+                            gan_ves_frac = gan_usd_frac * maker_compra
+                            comparativo_str = (
+                                f"\n\U0001F504 *Escenario Alternativo (Vender fraccionado de a $10 / 8K Bs):*\n"
+                                f"- Vender en partes a: *{venta_frac:.2f} VES*\n"
+                                f"- Margen Neto: {margen_frac:+.2f}%\n"
+                                f"- Ganancia Neta Total: *${gan_usd_frac:.2f} USD* (~Bs.{gan_ves_frac:.2f})\n"
+                            )
+
                     texto_alerta = (
                         f"\U0001F514 *ALERTA P2P DETALLADA* ({nombre_filtro()})\n"
-                        f"Activo: *{top['asset']}* | Margen neto: *{top['margen']:+.2f}%* \u2705 RENTABLE\n\n"
-                        f"\U0001F449 *Pasos sugeridos (Operación Maker-Maker):*\n"
-                        f"1\ufe0f\u20e3 *COMPRA:* Publica un anuncio de *COMPRA* en Binance P2P (pagas Bs y recibes {top['asset']}) con precio fijado en *{top['compra']:.2f} VES*.\n"
+                        f"Activo: *{top['asset']}* | Margen neto actual: *{top['margen']:+.2f}%* \u2705 RENTABLE\n\n"
+                        f"\U0001F449 *Pasos sugeridos para tu configuración actual ({nombre_filtro()}):*\n"
+                        f"1\ufe0f\u20e3 *COMPRA:* Publica un anuncio de *COMPRA* (pagas Bs y recibes {top['asset']}) con precio fijado en *{top['compra']:.2f} VES*.\n"
                         f"   - Configura el límite mínimo de tu anuncio en: *{limite_anuncio}*.\n"
-                        f"2\ufe0f\u20e3 *VENTA:* Cuando se complete tu compra, publica un anuncio de *VENTA* (entregas {top['asset']} y recibes Bs en tu Banco de Venezuela / Pago Móvil) con precio fijado en *{top['venta']:.2f} VES*.\n\n"
-                        f"\U0001F4C8 *Finanzas estimadas:*\n"
+                        f"2\ufe0f\u20e3 *VENTA:* Publica un anuncio de *VENTA* (recibes Bs en BDV/Pago Móvil) con precio fijado en *{top['venta']:.2f} VES*.\n"
+                        f"   - Ganancia neta estimada con tu capital: *${top['ganancia_usd']:.2f} USD* (~{ves_ganancia_str})\n"
+                        f"{comparativo_str}\n"
+                        f"\u2139 *Detalle financiero de la alerta:*\n"
                         f"- Spread Bruto: {spread_bruto:.2f}%\n"
-                        f"- Comisiones Totales: -{COMISION_TOTAL*100:.2f}% (Binance Maker 0.50% + BDV 0.30%)\n"
-                        f"- *Ganancia Neta:* *${top['ganancia_usd']:.2f} USD* (~{ves_ganancia_str}) operando tu capital de *${CONFIG['capital']:.0f} USD*."
+                        f"- Comisiones Totales: -{COMISION_TOTAL*100:.2f}% (Binance Maker 0.50% + BDV 0.30%)"
                     )
                     
                     _tg_call("sendMessage", {
