@@ -1,4 +1,9 @@
 # Bot P2P Binance Venezuela — Contexto
+> ⚠️ **LEER `CONTEXTO.md` primero** — contiene el historial completo de intentos, resultados y conclusión del proyecto general de generación de ingresos.
+
+## Referencia cruzada
+- `CONTEXTO.md` — historial completo del proyecto (qué se probó, qué funciona, qué no, lecciones aprendidas)
+- `AGENTS.md` (este archivo) — detalles técnicos del bot P2P Binance
 
 ## Propósito
 Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras criptos). Calcula márgenes de arbitraje Maker (compra y venta), alerta cuando supera un umbral, y permite interactuar vía Telegram con botones inline.
@@ -68,6 +73,7 @@ Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras cripto
 - **Alerta de recuperación**: Cuando un asset pasa de margen negativo a positivo
 - **Modo silencioso**: Sin notificaciones entre 12 AM y 7 AM (hora Venezuela)
 - **Ganancia en VES**: Muestra ganancia en USD y Bs.
+- **Historial**: Guarda precios cada 60s en `historial_precios.jsonl`. Botón "📅 Historial" en el menú muestra min/max/promedio de USDT del período.
 
 ## Horario de silencio
 - `VENEZUELA_TZ = timezone(timedelta(hours=-4))`

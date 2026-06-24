@@ -5,7 +5,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -47,6 +47,8 @@ ULTIMOS = {}
 ESTADOS_USUARIO = {}
 MARGE_ANTERIOR = {}  # asset -> ultimo margen, para detectar recuperacion
 ALERTA_ENVIADA = set()  # assets con alerta ya enviada en este ciclo positivo
+VPS_EXPIRY = date(2026, 7, 24)
+VPS_EXPIRY_NOTIFIED = False
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -55,6 +57,7 @@ HEADERS = {
 
 URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 ASSETS_VES = ["USDT", "BTC", "ETH", "BNB", "USDC", "SOL"]
+HISTORIAL_PATH = "historial_precios.jsonl"
 
 VENEZUELA_TZ = timezone(timedelta(hours=-4))
 SLEEP_START = 0  # 12 AM
@@ -190,7 +193,8 @@ def enviar_menu(chat_id=None, texto=None):
         [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
          {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
         [{"text": "\U0001F4CB Estado", "callback_data": "status"},
-         {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+         {"text": "\U0001F4C5 Historial", "callback_data": "historial"}],
+        [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
     kb = json.dumps({"inline_keyboard": _kb_menu})
     _tg_call("sendMessage", {
@@ -213,7 +217,8 @@ def editar_mensaje(chat_id, message_id, texto):
         [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']})", "callback_data": "capital"},
          {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
         [{"text": "\U0001F4CB Estado", "callback_data": "status"},
-         {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+         {"text": "\U0001F4C5 Historial", "callback_data": "historial"}],
+        [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
     kb = json.dumps({"inline_keyboard": _kb_menu})
     _tg_call("editMessageText", {
@@ -407,6 +412,38 @@ def procesar_callback(cq):
             "text": f"\u2699\ufe0f Capital actual: ${CONFIG['capital']}\nResponde con el nuevo monto en USDT:"
         })
 
+    elif data == "historial":
+        try:
+            with open(HISTORIAL_PATH) as f:
+                lineas = f.readlines()
+            total = len(lineas)
+            if total == 0:
+                editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
+            else:
+                primera = json.loads(lineas[0])
+                ultima = json.loads(lineas[-1])
+                lines = [
+                    f"\U0001F4C5 *Historial* ({total} registros)\n",
+                    f"Desde: {primera['ts'][:19]}",
+                    f"Hasta: {ultima['ts'][:19]}\n",
+                    "*Resumen USDT*"
+                ]
+                usdt_margenes = []
+                for l in lineas:
+                    d = json.loads(l)
+                    if "USDT" in d:
+                        usdt_margenes.append(d["USDT"]["margen"])
+                if usdt_margenes:
+                    lines.append(f"Min: {min(usdt_margenes):+.2f}%")
+                    lines.append(f"Máx: {max(usdt_margenes):+.2f}%")
+                    lines.append(f"Prom: {sum(usdt_margenes)/len(usdt_margenes):+.2f}%")
+                _tg_call("sendMessage", {
+                    "chat_id": chat_id, "parse_mode": "Markdown",
+                    "text": "\n".join(lines)
+                })
+        except FileNotFoundError:
+            editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
+
     elif data == "status":
         lines = [f"\U0001F4CB *Estado*\nCapital: ${CONFIG['capital']}\nUmbral: {CONFIG['margen_objetivo']}%"]
         for a in ASSETS_VES:
@@ -466,12 +503,24 @@ _ESTADO_SUENO = None  # "dormido" | "despierto" | None
 
 
 def loop_monitoreo():
-    global _ESTADO_SUENO
+    global _ESTADO_SUENO, VPS_EXPIRY_NOTIFIED
     print("  Monitoreo cada 60s...", flush=True)
     ciclo = 0
     while True:
         try:
             activo = en_horario()
+
+            # Notificar vencimiento VPS 5 dias antes
+            if not VPS_EXPIRY_NOTIFIED and (VPS_EXPIRY - date.today()).days <= 5:
+                VPS_EXPIRY_NOTIFIED = True
+                _tg_call("sendMessage", {
+                    "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                    "text": (
+                        f"\u26A0\ufe0f *El VPS vence en {(VPS_EXPIRY - date.today()).days} d\u00edas*\n"
+                        f"Fecha: {VPS_EXPIRY}\n"
+                        f"Cancelar en Kamatera para evitar cobros."
+                    )
+                })
 
             # Cambio de estado sueño -> despierto
             if activo and _ESTADO_SUENO == "dormido":
@@ -492,6 +541,16 @@ def loop_monitoreo():
                     mejores.append(r)
                     print(f"  {asset}: {r['margen']:+.2f}%", flush=True)
                 time.sleep(0.5)
+
+            if mejores:
+                registro = {"ts": datetime.now(VENEZUELA_TZ).isoformat()}
+                for r in mejores:
+                    registro[r["asset"]] = {"compra": r["compra"], "venta": r["venta"], "margen": r["margen"]}
+                try:
+                    with open(HISTORIAL_PATH, "a") as f:
+                        f.write(json.dumps(registro) + "\n")
+                except Exception:
+                    pass
 
             if not activo:
                 time.sleep(60)
