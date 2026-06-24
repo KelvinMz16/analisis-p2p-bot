@@ -92,3 +92,15 @@ Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras cripto
 - No usar `python-telegram-bot` ni `httpx` (fallan en HF con `ConnectError`)
 - `getUpdates` usa POST con JSON (timeout=10)
 - Output unbuffered forzado (`PYTHONUNBUFFERED=1`, `python -u`)
+
+## Investigación Kontigo + BPay (archivada)
+- Kontigo **no permite transferencia directa** a BPay — solo vía redes blockchain (USDT/USDC)
+- Redes soportadas por Kontigo: Arbitrum, Polygon, Avalanche, Gnosis, TRON (TRC-20), Ethereum (ERC-20, la más cara)
+- Costo TRC-20: ~$1. Costo Arbitrum/Polygon/Avalanche/Gnosis: <$0.10-0.50
+- Además Kontigo cobra comisión por retiro: 1.7% (BNC, Banco Plaza, Banco Activo) o 3.5% (Bancamiga)
+- **Conclusión:** Con spread 775.50↔801 (~3.3% bruto), después de comisiones Kontigo + red, el resultado es pérdida (~2.3%). Se necesitaría spread >5% para que valga la pena. El bot P2P busca justamente esos picos anómalos en el P2P directo.
+
+## ⚠️ Binance prohibió cuentas asociadas a Kontigo (Ene 2026)
+- Binance prohibió "bajo efecto inmediato" el uso de cuentas bancarias asociadas a Kontigo ("Oha Technology") en transacciones P2P en Venezuela
+- Penalizaciones: 1ra = 24h suspensión, 2da = 1 semana, 3ra = pérdida de insignia de comerciante verificado
+- **Solución:** Usar Kontigo solo para COMPRAR USDT y enviarlos a Binance. Para la VENTA en P2P, recibir los bolívares en una cuenta personal (BDV, Banesco, Mercantil, etc.) no asociada a Kontigo.

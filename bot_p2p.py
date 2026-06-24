@@ -340,16 +340,14 @@ def procesar_callback(cq):
         worst = resultados[-1] if len(resultados) > 1 else best
 
         # Señales independientes de compra y venta
-        mejor_compra = max(resultados, key=lambda x: ((x['venta'] - x['compra']) / x['venta']))
-        mejor_venta = max(resultados, key=lambda x: ((x['venta'] - x['compra']) / x['compra']))
+        mejor_compra = min(resultados, key=lambda x: x['compra'])
+        mejor_venta = max(resultados, key=lambda x: x['venta'])
 
         texto = (
             f"\U0001F4CA *Multi-cripto*\n"
             f"\U0001F3C6 *Mejor margen:* {best['asset']} ({best['margen']:+.2f}%)\n"
-            f"\U0001F4E5 *Señal COMPRA:* {mejor_compra['asset']} "
-            f"(desc. {(mejor_compra['venta']-mejor_compra['compra'])/mejor_compra['venta']*100:.1f}%)\n"
-            f"\U0001F4E4 *Señal VENTA:* {mejor_venta['asset']} "
-            f"(prima {(mejor_venta['venta']-mejor_venta['compra'])/mejor_venta['compra']*100:.1f}%)\n"
+            f"\U0001F4E5 *COMPRAR {mejor_compra['asset']} a:* {mejor_compra['compra']:.2f} VES\n"
+            f"\U0001F4E4 *VENDER {mejor_venta['asset']} a:* {mejor_venta['venta']:.2f} VES\n"
             f"\u26A0 Evitar: {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
             f"Selecciona para detalle:\n"
         )
