@@ -716,17 +716,27 @@ def loop_monitoreo():
                 if top and top["margen"] >= CONFIG["margen_objetivo"] and top["asset"] not in ALERTA_ENVIADA:
                     ALERTA_ENVIADA.add(top["asset"])
                     print(f">>> OPORTUNIDAD {top['asset']} <<<", flush=True)
-                    rentable_tag = "\u2705 RENTABLE" if top['margen'] > 0 else ""
+                    spread_bruto = ((top['venta'] - top['compra']) / top['compra']) * 100
+                    
+                    limite_anuncio = f"{CONFIG['monto_filtro']} Bs" if CONFIG['monto_filtro'] > 0 else "libre (ej. 400 Bs)"
+                    ves_ganancia_str = f"Bs.{top['ganancia_ves']:.2f}" if top.get("ganancia_ves") else f"Bs.{(top['ganancia_usd'] * top['compra']):.2f}"
+                    
+                    texto_alerta = (
+                        f"\U0001F514 *ALERTA P2P DETALLADA* ({nombre_filtro()})\n"
+                        f"Activo: *{top['asset']}* | Margen neto: *{top['margen']:+.2f}%* \u2705 RENTABLE\n\n"
+                        f"\U0001F449 *Pasos sugeridos (Operación Maker-Maker):*\n"
+                        f"1\ufe0f\u20e3 *COMPRA:* Publica un anuncio de *COMPRA* en Binance P2P (pagas Bs y recibes {top['asset']}) con precio fijado en *{top['compra']:.2f} VES*.\n"
+                        f"   - Configura el límite mínimo de tu anuncio en: *{limite_anuncio}*.\n"
+                        f"2\ufe0f\u20e3 *VENTA:* Cuando se complete tu compra, publica un anuncio de *VENTA* (entregas {top['asset']} y recibes Bs en tu Banco de Venezuela / Pago Móvil) con precio fijado en *{top['venta']:.2f} VES*.\n\n"
+                        f"\U0001F4C8 *Finanzas estimadas:*\n"
+                        f"- Spread Bruto: {spread_bruto:.2f}%\n"
+                        f"- Comisiones Totales: -{COMISION_TOTAL*100:.2f}% (Binance Maker 0.50% + BDV 0.30%)\n"
+                        f"- *Ganancia Neta:* *${top['ganancia_usd']:.2f} USD* (~{ves_ganancia_str}) operando tu capital de *${CONFIG['capital']:.0f} USD*."
+                    )
+                    
                     _tg_call("sendMessage", {
                         "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                        "text": (
-                            f"\U0001F514 *ALERTA P2P* ({nombre_filtro()})\n"
-                            f"\U0001F3C6 {top['asset']} | Margen neto: {top['margen']:+.2f}% {rentable_tag}\n"
-                            f"Compra Maker: {top['compra']:.2f} VES\n"
-                            f"Venta Maker:  {top['venta']:.2f} VES\n"
-                            f"Comisiones: -{COMISION_TOTAL*100:.2f}%\n"
-                            f"Ganancia: ${top['ganancia_usd']:.2f}{ganancia_ves_top} \u00d7 ${CONFIG['capital']:.0f}"
-                        )
+                        "text": texto_alerta
                     })
                 elif top and top["margen"] < CONFIG["margen_objetivo"]:
                     ALERTA_ENVIADA.discard(top["asset"])
