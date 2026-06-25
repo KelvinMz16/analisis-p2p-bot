@@ -810,6 +810,10 @@ def loop_monitoreo():
                                 f"- Ganancia Neta Total: *${gan_usd_frac:.2f} USD* (~Bs.{gan_ves_frac:.2f})\n"
                             )
 
+                    warning_msg = ""
+                    if CONFIG["capital"] < MIN_AD_AMOUNT:
+                        warning_msg = "\n> ⚠️ *Advertencia:* Tu capital es inferior al mínimo requerido ($100) para crear anuncios Maker. Considera operar como *Taker* o aumentar tu capital antes de publicar anuncios."
+
                     texto_alerta = (
                         f"\U0001F514 *ALERTA P2P DETALLADA* ({nombre_filtro()})\n"
                         f"Activo: *{top['asset']}* | Margen neto actual: *{top['margen']:+.2f}%* \u2705 RENTABLE\n\n"
@@ -822,7 +826,7 @@ def loop_monitoreo():
                         f"\u2139 *Detalle financiero de la alerta:*\n"
                         f"- Spread Bruto: {spread_bruto:.2f}%\n"
                         f"- Comisiones Totales: -{COMISION_TOTAL*100:.2f}% (Binance Maker 0.50% + BDV 0.30%)\n"
-                        f"{'' if CONFIG['capital'] >= MIN_AD_AMOUNT else '\n> ⚠️ *Advertencia:* Tu capital es inferior al mínimo requerido ($100) para crear anuncios Maker. Considera operar como *Taker* o aumentar tu capital antes de publicar anuncios.'}"
+                        f"{warning_msg}"
                     )
                     
                     _tg_call("sendMessage", {
