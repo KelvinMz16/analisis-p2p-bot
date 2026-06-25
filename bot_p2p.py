@@ -435,8 +435,20 @@ def obtener_precio_dex(network_key):
     return None
 
 
+def obtener_precio_binance_spot(symbol):
+    """Obtiene precio spot desde la API pública de Binance."""
+    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        return float(resp.json().get("price", 0))
+    except Exception as e:
+        print(f"[BinanceSpot/{symbol}] Error: {e}", flush=True)
+        return None
+
+
 def obtener_precio_spot(network_key):
-    """Obtiene el precio spot via CoinGecko, con fallback a DexScreener si da 429."""
+    """Obtiene el precio spot via CoinGecko, con fallback a Binance API, luego DexScreener."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
@@ -448,9 +460,13 @@ def obtener_precio_spot(network_key):
         if price > 0:
             return price
     except Exception as e:
-        print(f"[CoinGecko/{network_key}] Error (fallback): {e}", flush=True)
-    # Fallback a DexScreener
-    print(f"[CoinGecko/{network_key}] Usando DEX como referencia Spot", flush=True)
+        print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
+    # Fallback a Binance Spot API
+    price = obtener_precio_binance_spot(cfg["binance_symbol"])
+    if price and price > 0:
+        return price
+    # Fallback final a DexScreener
+    print(f"[Spot/{network_key}] Usando DEX como referencia (sin spot propio)", flush=True)
     return obtener_precio_dex(network_key)
 
 
