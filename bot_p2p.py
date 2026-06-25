@@ -296,20 +296,31 @@ def calcular_margen(asset, trans_amount=None):
     # - "SELL" retorna anuncios donde Makers COMPRAN (precio bajo para el Taker que vende).
     # Para un Maker: compras barato (apareces en SELL) y vendes caro (apareces en BUY).
     monto = trans_amount if trans_amount is not None else CONFIG["monto_filtro"]
-    maker_venta = obtener_precio_p2p("BUY", asset, monto)   # Precio de venta Maker (alto)
-    maker_compra = obtener_precio_p2p("SELL", asset, monto)  # Precio de compra Maker (bajo)
+    maker_venta = obtener_precio_p2p("BUY", asset, monto)   # Precio de venta Maker (alto) / Compra Taker
+    maker_compra = obtener_precio_p2p("SELL", asset, monto)  # Precio de compra Maker (bajo) / Venta Taker
     if maker_venta is None or maker_compra is None:
         return None
-    # Ganancia neta = spread - comision Binance compra - comision Binance venta - comision banco
-    ganancia_neta = (maker_venta - maker_compra) - (maker_compra * COMISION) - (maker_venta * COMISION) - (maker_compra * COMISION_BANCO)
-    margen = (ganancia_neta / maker_compra) * 100
-    ganancia_usd = CONFIG["capital"] * (margen / 100)
+    
+    # Maker Margen
+    ganancia_neta_maker = (maker_venta - maker_compra) - (maker_compra * COMISION) - (maker_venta * COMISION) - (maker_compra * COMISION_BANCO)
+    margen_maker = (ganancia_neta_maker / maker_compra) * 100
+    ganancia_usd_maker = CONFIG["capital"] * (margen_maker / 100)
+    
+    # Taker Margen (compra a maker_venta, vende a maker_compra)
+    ganancia_neta_taker = (maker_compra - maker_venta) - (maker_venta * COMISION) - (maker_compra * COMISION) - (maker_venta * COMISION_BANCO)
+    margen_taker = (ganancia_neta_taker / maker_venta) * 100
+    ganancia_usd_taker = CONFIG["capital"] * (margen_taker / 100)
+
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta") or None
-    ganancia_ves = (ganancia_usd * tasa_ves) if tasa_ves else None
-    ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": margen}
+    ganancia_ves_maker = (ganancia_usd_maker * tasa_ves) if tasa_ves else None
+    ganancia_ves_taker = (ganancia_usd_taker * tasa_ves) if tasa_ves else None
+
+    ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": margen_maker}
     return {
         "asset": asset, "compra": maker_compra, "venta": maker_venta,
-        "margen": margen, "ganancia_usd": ganancia_usd, "ganancia_ves": ganancia_ves,
+        "margen": margen_maker, "ganancia_usd": ganancia_usd_maker, "ganancia_ves": ganancia_ves_maker,
+        "taker_compra": maker_venta, "taker_venta": maker_compra,
+        "taker_margen": margen_taker, "taker_ganancia_usd": ganancia_usd_taker, "taker_ganancia_ves": ganancia_ves_taker,
         "filtro": nombre_filtro(monto)
     }
 # ============================================================
@@ -317,28 +328,46 @@ def calcular_margen(asset, trans_amount=None):
 
 def calcular_margen_usdt_usdc(trans_amount=None):
     """Calcular margen al comprar USDT y vender USDC.
-    Devuelve un dict con precios, margen y ganancias estimadas.
+    Devuelve un dict con precios, margen y ganancias estimadas tanto Maker como Taker.
     """
     monto = trans_amount if trans_amount is not None else CONFIG["monto_filtro"]
-    # Precio para comprar USDT (taker) -> usamos tradeType "SELL" (makers compran USDT)
-    usdt_compra = obtener_precio_p2p("SELL", "USDT", monto)
-    # Precio para vender USDC (taker) -> usamos tradeType "BUY" (makers venden USDC)
-    usdc_venta = obtener_precio_p2p("BUY", "USDC", monto)
-    if usdt_compra is None or usdc_venta is None:
+    # Maker: compra USDT (aparece en SELL), vende USDC (aparece en BUY)
+    usdt_compra_maker = obtener_precio_p2p("SELL", "USDT", monto)
+    usdc_venta_maker = obtener_precio_p2p("BUY", "USDC", monto)
+    
+    # Taker: compra USDT (compra del Maker Venta/BUY), vende USDC (vende al Maker Compra/SELL)
+    usdt_compra_taker = obtener_precio_p2p("BUY", "USDT", monto)
+    usdc_venta_taker = obtener_precio_p2p("SELL", "USDC", monto)
+    
+    if usdt_compra_maker is None or usdc_venta_maker is None or usdt_compra_taker is None or usdc_venta_taker is None:
         return None
-    # Ganancia neta en VES considerando comisiones
-    ganancia_neta = (usdc_venta - usdt_compra) - (usdt_compra * COMISION) - (usdc_venta * COMISION) - (usdt_compra * COMISION_BANCO)
-    margen = (ganancia_neta / usdt_compra) * 100
-    ganancia_usd = CONFIG["capital"] * (margen / 100)
+        
+    # Maker Margen
+    ganancia_neta_maker = (usdc_venta_maker - usdt_compra_maker) - (usdt_compra_maker * COMISION) - (usdc_venta_maker * COMISION) - (usdt_compra_maker * COMISION_BANCO)
+    margen_maker = (ganancia_neta_maker / usdt_compra_maker) * 100
+    ganancia_usd_maker = CONFIG["capital"] * (margen_maker / 100)
+    
+    # Taker Margen
+    ganancia_neta_taker = (usdc_venta_taker - usdt_compra_taker) - (usdt_compra_taker * COMISION) - (usdc_venta_taker * COMISION) - (usdt_compra_taker * COMISION_BANCO)
+    margen_taker = (ganancia_neta_taker / usdt_compra_taker) * 100
+    ganancia_usd_taker = CONFIG["capital"] * (margen_taker / 100)
+    
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta")
-    ganancia_ves = (ganancia_usd * tasa_ves) if tasa_ves else None
+    ganancia_ves_maker = (ganancia_usd_maker * tasa_ves) if tasa_ves else None
+    ganancia_ves_taker = (ganancia_usd_taker * tasa_ves) if tasa_ves else None
+    
     return {
         "asset": "USDT→USDC",
-        "compra_usdt": usdt_compra,
-        "venta_usdc": usdc_venta,
-        "margen": margen,
-        "ganancia_usd": ganancia_usd,
-        "ganancia_ves": ganancia_ves,
+        "compra_usdt": usdt_compra_maker,
+        "venta_usdc": usdc_venta_maker,
+        "margen": margen_maker,
+        "ganancia_usd": ganancia_usd_maker,
+        "ganancia_ves": ganancia_ves_maker,
+        "taker_compra_usdt": usdt_compra_taker,
+        "taker_venta_usdc": usdc_venta_taker,
+        "taker_margen": margen_taker,
+        "taker_ganancia_usd": ganancia_usd_taker,
+        "taker_ganancia_ves": ganancia_ves_taker,
         "filtro": nombre_filtro(monto)
     }
 
@@ -411,17 +440,27 @@ def procesar_callback(cq):
         asset = CONFIG.get("default_crypto", "USDT")
         r = calcular_margen(asset)
         if r:
-            desc = ((r['venta'] - r['compra']) / r['venta']) * 100
             pri = ((r['venta'] - r['compra']) / r['compra']) * 100
             rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+            
+            # Taker calculations
+            taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+            taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+
             editar_mensaje(chat_id, msg_id,
-                f"\U0001F4B0 *{asset} / VES* ({r['filtro']})\n"
+                f"\U0001F4B0 *{asset} / VES* ({r['filtro']})\n\n"
+                f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
                 f"Compra Maker: {r['compra']:.2f} VES\n"
                 f"Venta Maker:  {r['venta']:.2f} VES\n"
                 f"Spread bruto: {pri:.2f}%\n"
-                f"Comisiones: -{COMISION_TOTAL*100:.2f}%\n"
-                f"*Margen neto: {r['margen']:+.2f}%* {rentable}\n"
-                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}"
+                f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
+                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+                f"Compra Taker: {r['taker_compra']:.2f} VES\n"
+                f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
+                f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+                f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)"
             )
         else:
             editar_mensaje(chat_id, msg_id, f"No se pudieron obtener precios de {asset}.")
@@ -478,6 +517,9 @@ def procesar_callback(cq):
         r = calcular_margen_usdt_usdc()
         if r:
             rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+            taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+            taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+            
             kb = json.dumps({
                 "inline_keyboard": [
                     [{"text": "🏠 Inicio", "callback_data": "menu"},
@@ -487,12 +529,18 @@ def procesar_callback(cq):
             _tg_call("editMessageText", {
                 "chat_id": chat_id, "message_id": msg_id,
                 "text": (
-                    f"\U0001F500 *Combo USDT \u2794 USDC / VES* ({r['filtro']})\n"
+                    f"\U0001F500 *Combo USDT \u2794 USDC / VES* ({r['filtro']})\n\n"
+                    f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
                     f"Compra Maker (USDT): {r['compra_usdt']:.2f} VES\n"
                     f"Venta Maker (USDC):  {r['venta_usdc']:.2f} VES\n"
-                    f"Comisiones: -{COMISION_TOTAL*100:.2f}%\n"
-                    f"*Margen neto: {r['margen']:+.2f}%* {rentable}\n"
+                    f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
                     f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                    f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+                    f"Compra Taker (USDT): {r['taker_compra_usdt']:.2f} VES\n"
+                    f"Venta Taker (USDC):  {r['taker_venta_usdc']:.2f} VES\n"
+                    f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+                    f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                    f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
                     f"📌 Compra USDT (Maker) y venta USDC (Maker)."
                 ),
                 "parse_mode": "Markdown",
@@ -516,6 +564,11 @@ def procesar_callback(cq):
         rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
         best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
         estrella = " \U0001F3C6" if asset == best_asset else ""
+
+        # Taker calculations
+        taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+        taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+
         kb = json.dumps({
             "inline_keyboard": [
                 [{"text": "🏠 Inicio", "callback_data": "menu"},
@@ -526,13 +579,19 @@ def procesar_callback(cq):
         _tg_call("editMessageText", {
             "chat_id": chat_id, "message_id": msg_id,
             "text": (
-                f"\U0001F4B0 *{asset} / VES*{estrella} ({r['filtro']})\n"
+                f"\U0001F4B0 *{asset} / VES*{estrella} ({r['filtro']})\n\n"
+                f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
                 f"Compra Maker: {r['compra']:.2f} VES\n"
                 f"Venta Maker:  {r['venta']:.2f} VES\n"
                 f"Spread bruto: {spread_bruto:.2f}%\n"
-                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n"
-                f"*Margen neto: {r['margen']:+.2f}%* {rentable}\n"
+                f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
                 f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+                f"Compra Taker: {r['taker_compra']:.2f} VES\n"
+                f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
+                f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+                f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
                 f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
             ),
             "parse_mode": "Markdown", "reply_markup": kb
