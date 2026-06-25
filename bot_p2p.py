@@ -160,9 +160,21 @@ VPS_EXPIRY = date(2026, 7, 24)
 VPS_EXPIRY_NOTIFIED = False
 
 # Monitoreo BCV via @subastasBCV
-_BCV_BDV_ACTIVO = None       # True/False/None
-_BCV_BDV_ULTIMOS_DATOS = {}  # {tasa, minimo, maximo, hora}
+_BCV_BANCOS_CONFIG = {
+    "bdv":  {"nombres": ["BDV", "BANCO DE VENEZUELA"], "label": "BDV"},
+    "mer":  {"nombres": ["MERCANTIL"], "label": "Mercantil"},
+    "bnc":  {"nombres": ["BNC"], "label": "BNC"},
+    "bbva": {"nombres": ["BBVA", "PROVINCIAL"], "label": "BBVA"},
+    "bt":   {"nombres": ["TRINIDAD", "BANCO DE LA TRINIDAD", "BT"], "label": "BT"},
+}
+# Estado actual por banco: banco_key -> {"activo": bool/None, "datos": dict, "ultimo_post_ts": float}
+_BCV_ESTADOS = {}
 _BCV_ULTIMO_POST_ID = None   # ultimo post_id procesado
+_BCV_STALE_TIMEOUT = 7200    # 2h sin posts -> considerar cerrado
+_BCV_FALSE_POSITIVE_TERMS = [
+    "falso positivo", "desactivar el bot", "error del bot",
+    "prueba temporal", "revisando bot",
+]
 
 # Hourly aggregation containers (populated from Supabase history)
 compras_por_hora = defaultdict(list)  # key: hour 0-23, value: list of buy prices
@@ -1259,10 +1271,36 @@ threading.Thread(target=_run_health_server, daemon=True).start()
 _ESTADO_SUENO = None  # "dormido" | "despierto" | None
 
 
+def _normalizar_texto(text):
+    """Elimina acentos/combining marks y chars invisibles.
+    Esto permite que regex como 'MINIMO' funcione con 'MÍNIMO'."""
+    import unicodedata
+    text = unicodedata.normalize('NFKD', text)
+    text = ''.join(c for c in text if not unicodedata.combining(c))
+    text = text.replace('\u200b', '')  # zero-width space
+    return text
+
+
+def _es_falso_positivo(msg):
+    """Detecta si un post es una nota del admin (falso positivo, prueba, etc)."""
+    lower = msg.lower()
+    return any(term in lower for term in _BCV_FALSE_POSITIVE_TERMS)
+
+
+def _identificar_banco(msg):
+    """Detecta que banco(s) menciona el post. Retorna primera coincidencia o None."""
+    for bk, cfg in _BCV_BANCOS_CONFIG.items():
+        for nombre in cfg["nombres"]:
+            if nombre in msg:
+                return bk
+    return None
+
+
 def scrape_subastasbcv():
-    """Scrapea @subastasBCV en busca de estado de intervencion de BDV.
-    Retorna dict con keys: activo(bool), tasa(str), minimo(str), maximo(str), hora(str)
-    o None si no encuentra datos de BDV."""
+    """Scrapea @subastasBCV en busca de estado de intervencion por banco.
+    Retorna dict con keys: banco(str), activo(bool), tasa(str), minimo(str),
+    maximo(str), hora(str) o None si no encuentra cambios.
+    Actualiza _BCV_ESTADOS[banco]['ultimo_post_ts'] al ver cualquier post."""
     global _BCV_ULTIMO_POST_ID
     try:
         r = requests.get("https://t.me/s/subastasBCV", timeout=15)
@@ -1275,23 +1313,49 @@ def scrape_subastasbcv():
             html, re.DOTALL
         )
 
+        ahora = time.time()
+
         for post_id, msg_html in posts:
             msg = re.sub(r'<[^>]+>', '', msg_html)
             msg = msg.replace('&#36;', '$').replace('&#036;', '$')
             msg = msg.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
             msg = msg.replace('&#39;', "'").replace('&quot;', '"')
+            msg = _normalizar_texto(msg)
 
-            if "BDV" not in msg and "BANCO DE VENEZUELA" not in msg:
+            # Identificar que banco(s) menciona
+            banco = _identificar_banco(msg)
+            if not banco:
                 continue
 
-            # Activo
+            # Actualizar timestamp de este banco
+            est = _estado_bcv(banco)
+            est["ultimo_post_ts"] = ahora
+
+            # Saltar falsos positivos (notas del admin)
+            if _es_falso_positivo(msg):
+                continue
+
+            # Activo — buscar estructura con TASA/MIN/MAX/HORA
             if "INTERVENCI" in msg and "ACTIVA" in msg:
-                tasa = re.search(r'TASA:\s*Bs\.?\s*([\d.,]+)', msg)
-                minimo = re.search(r'M[IÍ]NIMO:\s*(\d[\d.]*)', msg)
-                maximo = re.search(r'M[AÁ]XIMO:\s*(\d[\d.]*)', msg)
-                hora = re.search(r'HORA:\s*([\d:]+)', msg)
+                tasa = re.search(r'TASA:?\s*Bs\.?\s*([\d.,]+)', msg)
+                minimo = re.search(r'(?:MINIMO|MIN|M[NI]NIMO):?\s*(\d{1,4}(?:[\d.,]*))', _normalizar_texto(msg))
+                if not minimo:
+                    minimo = re.search(r'MINIMO:\s*(\d[\d.]*)', msg)
+                maximo = re.search(r'(?:MAXIMO|MAX|M[ÁA]XIMO):?\s*(\d{1,4}(?:[\d.,]*))', _normalizar_texto(msg))
+                if not maximo:
+                    maximo = re.search(r'MAXIMO:\s*(\d[\d.]*)', msg)
+                hora = re.search(r'HORA:?\s*([\d]{1,2}:[\d]{2})', msg)
+                # Fallback: buscar montos seguidos de signo $
+                if not minimo or not maximo:
+                    nums = re.findall(r'(\d+\.?\d*)\s*\$', msg)
+                    if len(nums) >= 2:
+                        if not minimo:
+                            minimo = type('obj', (object,), {'group': lambda s, i: nums[0]})()
+                        if not maximo:
+                            maximo = type('obj', (object,), {'group': lambda s, i: nums[-1]})()
 
                 data = {
+                    "banco": banco,
                     "activo": True,
                     "tasa": tasa.group(1) if tasa else "",
                     "minimo": minimo.group(1) if minimo else "",
@@ -1307,6 +1371,7 @@ def scrape_subastasbcv():
             # Cerrada
             if "INTERVENCI" in msg and "CERRADA" in msg:
                 data = {
+                    "banco": banco,
                     "activo": False,
                     "tasa": "",
                     "minimo": "",
@@ -1324,10 +1389,19 @@ def scrape_subastasbcv():
         return None
 
 
+def _estado_bcv(banco_key):
+    """Obtiene el estado actual de un banco, inicializandolo si es necesario."""
+    if banco_key not in _BCV_ESTADOS:
+        _BCV_ESTADOS[banco_key] = {"activo": None, "datos": {}, "ultimo_post_ts": 0.0}
+    return _BCV_ESTADOS[banco_key]
+
+
 def _loop_bcv_scrape():
-    """Hilo separado: monitorea @subastasBCV cada 15s."""
-    global _BCV_BDV_ACTIVO
+    """Hilo separado: monitorea @subastasBCV cada 15s.
+    Soporta multiples bancos via _BCV_BANCOS_CONFIG.
+    Incluye deteccion de stale (2h sin posts -> considerar cerrado)."""
     print("  Monitoreo BCV cada 15s...", flush=True)
+    _stale_notified = set()  # bancos con stale ya notificado
     while True:
         try:
             if not en_horario():
@@ -1335,33 +1409,68 @@ def _loop_bcv_scrape():
                 continue
             bcv = scrape_subastasbcv()
             if bcv is not None:
-                prev = _BCV_BDV_ACTIVO
-                _BCV_BDV_ACTIVO = bcv["activo"]
+                banco = bcv.get("banco", "bdv")
+                estado = _estado_bcv(banco)
+                _stale_notified.discard(banco)
+                prev = estado["activo"]
+                estado["activo"] = bcv["activo"]
+                estado["ultimo_post_ts"] = time.time()
                 if bcv["activo"]:
-                    _BCV_BDV_ULTIMOS_DATOS = bcv
+                    estado["datos"] = bcv
                 if prev is not None and bcv["activo"] != prev:
+                    label = _BCV_BANCOS_CONFIG.get(banco, {}).get("label", banco.upper())
                     if bcv["activo"]:
                         texto = (
-                            f"\U0001F3E6\U0001F7E2 *BDV - Intervenci\u00f3n ACTIVA*\n"
+                            f"\U0001F3E6\U0001F7E2 *{label} - Intervenci\u00f3n ACTIVA*\n"
                             f"Tasa: *Bs. {bcv['tasa']}*\n"
                             f"M\u00ednimo: *{bcv['minimo']}$* | M\u00e1ximo: *{bcv['maximo']}$*\n"
                             f"Hora: {bcv['hora']} VE\n"
                             f"Fuente: @subastasBCV"
                         )
                     else:
+                        datos_prev = estado["datos"] if not bcv["activo"] else bcv
                         texto = (
-                            f"\U0001F3E6\U0001F534 *BDV - Intervenci\u00f3n CERRADA*\n"
-                            f"\u00daltimos datos: Bs. {_BCV_BDV_ULTIMOS_DATOS.get('tasa', '?')} "
-                            f"| {_BCV_BDV_ULTIMOS_DATOS.get('minimo', '?')}$ - {_BCV_BDV_ULTIMOS_DATOS.get('maximo', '?')}$\n"
+                            f"\U0001F3E6\U0001F534 *{label} - Intervenci\u00f3n CERRADA*\n"
+                            f"\u00daltimos datos: Bs. {datos_prev.get('tasa', '?')} "
+                            f"| {datos_prev.get('minimo', '?')}$ - {datos_prev.get('maximo', '?')}$\n"
                             f"Fuente: @subastasBCV"
                         )
                     _tg_call("sendMessage", {
                         "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
                         "text": texto
                     })
-                    print(f">>> BCV BDV cambio: {'ACTIVA' if bcv['activo'] else 'CERRADA'} <<<", flush=True)
+                    print(f">>> BCV {banco} cambio: {'ACTIVA' if bcv['activo'] else 'CERRADA'} <<<", flush=True)
                 if prev is None:
-                    _BCV_BDV_ACTIVO = bcv["activo"]
+                    estado["activo"] = bcv["activo"]
+
+            # Stale detection: por cada banco con estado ACTIVO
+            ahora = time.time()
+            for bk, cfg in _BCV_BANCOS_CONFIG.items():
+                est = _BCV_ESTADOS.get(bk)
+                if not est or est["activo"] != True:
+                    _stale_notified.discard(bk)
+                    continue
+                if est["ultimo_post_ts"] == 0:
+                    continue
+                if bk in _stale_notified:
+                    continue
+                tiempo_sin_datos = ahora - est["ultimo_post_ts"]
+                if tiempo_sin_datos > _BCV_STALE_TIMEOUT:
+                    _stale_notified.add(bk)
+                    label = cfg.get("label", bk.upper())
+                    est["activo"] = None  # estado incierto
+                    print(f">>> BCV STALE {bk}: {tiempo_sin_datos/3600:.1f}h sin posts <<<", flush=True)
+                    _tg_call("sendMessage", {
+                        "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                        "text": (
+                            f"\u26A0\ufe0f *{label} - Estado incierto*\n"
+                            f"No se han visto publicaciones de @subastasBCV sobre {label} "
+                            f"en las \u00faltimas {_BCV_STALE_TIMEOUT//3600}h.\n"
+                            f"\u00daltimos datos conocidos: Bs. {est['datos'].get('tasa', '?')} "
+                            f"| {est['datos'].get('minimo', '?')}$ - {est['datos'].get('maximo', '?')}$\n"
+                            f"Posible cierre de intervenci\u00f3n no detectado."
+                        )
+                    })
         except Exception as e:
             print(f"Error en loop BCV: {e}", flush=True)
         time.sleep(15)
