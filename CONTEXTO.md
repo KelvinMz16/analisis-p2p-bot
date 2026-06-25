@@ -1,73 +1,39 @@
 # Contexto del Proyecto — Análisis P2P Bot
 
-## Objetivo Original
-Generar $1+/día desde un VPS Kamatera (crédito $100, expira ~24 Jul 2026) sin inversión de capital, usando bots automatizados.
+## Objetivo
+Analizar los precios de compra y venta del mercado P2P de Binance para bolívares venezolanos (VES) utilizando métodos de pago autorizados (Banco de Venezuela y Pago Móvil) a fin de identificar oportunidades de arbitraje rentable de stablecoins (USDT/USDC). El sistema genera alertas estructuradas y educativas a través de Telegram y almacena un histórico de precios en Supabase para el análisis de horarios óptimos.
 
-## Constraints
-- Venezuela, sin tarjeta internacional
-- IP datacenter (Kamatera, Miami)
-- Sin proxies pagados
-- Sin capital inicial
-- PC local no puede estar 24/7
+## Arquitectura y Despliegue Actual
 
-## Stack
-- VPS: 103.90.161.123 (root / Conejo86), 2GB RAM, 20GB SSD
-- Python 3.10/3.11
-- Kamatera crédito $100 expira ~24 Jul 2026
+### 1. Servidor de Ejecución (Hugging Face Spaces)
+* **Space URL:** [VesArbitrajeP2P](https://huggingface.co/spaces/KelvinMz/VesArbitrajeP2P)
+* **SDK:** **Docker** (definido en [README.md](file:///c:/Users/Kelvin/proyectos/analisis-p2p-bot/README.md) con `app_port: 8080`).
+* **Servidor de Salud (Health Check):** Para cumplir con los requisitos de Hugging Face, el bot corre un servidor HTTP liviano en el puerto `8080` en un hilo secundario (daemon) que responde `{"status": "running"}`.
+* **Seguridad y Restricciones:** La carpeta `grass_bot` (relacionada con bots de compartición de ancho de banda y proxies) **fue eliminada permanentemente** del repositorio debido a que activaba las alertas automáticas de Hugging Face por uso de "Proxy", bloqueando el espacio. Actualmente el repositorio está libre de cualquier código de proxy.
 
-## Lo que se probó — Resultados
+### 2. Base de Datos (Supabase)
+* **Instancia:** `https://wmedwtgfjjkmflfbftxs.supabase.co`
+* **Tabla de Historial:** `public.historical_prices`
+* **Estructura de la Tabla:**
+  * `id` (`int8`, Autogenerado, Primary Key)
+  * `ts` (`timestamptz`, Timestamp del registro en hora local de Venezuela)
+  * `USDT`, `USDC`, `BTC`, `ETH`, `BNB`, `SOL` (todas de tipo `jsonb` para almacenar los precios de compra, venta y el margen calculado).
+* **Permisos:** RLS (Row Level Security) está desactivado para esta tabla y los privilegios `SELECT` e `INSERT` están concedidos al rol público (`anon`) para permitir la escritura del bot desde Hugging Face usando la clave anónima.
 
-### ✅ Funciona desde datacenter
-| Proyecto | Resultado | Ganancia |
-|----------|-----------|----------|
-| OKX Racer (Telegram) | ✅ Corre en VPS, balance 500 pts | Especulativo (airdrops) |
-| Tomarket (Telegram) | ✅ API accesible (api-web.tomarket.ai), login falla por sesión Telegram | Especulativo |
-| Bot P2P Binance | ✅ Corre pero mercado plano, sin spread | $0/mes |
-| AIOZ DePIN v1.2.6 | ✅ Conectado, pero `ai_status: Offline`, no asigna storage | $0/mes |
-| Bitget.com | ✅ API accesible (sin Cloudflare) | No implementado |
-| Gate.io API | ✅ `api.gateio.ws` accesible | No implementado |
+### 3. Configuración del Bot (Telegram & Variables)
+* **Notificaciones:** Envío de alertas detalladas mediante llamadas HTTPS a la API de Telegram. Para evadir bloqueos o censuras de IP de Hugging Face por parte de Telegram, utiliza un Cloudflare Worker como proxy (`CLOUDFLARE_PROXY`).
+* **Variables y Secretos (HF Secrets):**
+  * `HF_TOKEN`: Token de escritura para interactuar con la API de Hugging Face.
+  * `TELEGRAM_TOKEN`: Token del bot de Telegram obtenido con `@BotFather`.
+  * `TELEGRAM_CHAT_ID`: ID del chat de destino de las alertas.
+  * `SUPABASE_URL`: Enlace API de Supabase.
+  * `SUPABASE_KEY`: Clave JWT pública (`anon`) obtenida del dashboard de Supabase.
+* **Configuración del Usuario:** Para evitar reinicios del contenedor al cambiar parámetros de operación, el bot almacena y lee el capital actual y el margen objetivo desde un archivo local persistente llamado `config_usuario.json`.
 
-### ❌ Bloqueado (Cloudflare o IP datacenter)
-| Proyecto | Motivo |
-|----------|--------|
-| Blum | Cloudflare |
-| NotPixel | Cloudflare |
-| Seed | Cloudflare |
-| MemeFi | Cloudflare |
-| Bybit SpaceS | API 000, repo falso |
-| Bybit Coinsweeper | API 530 Cloudflare |
-| Grass.io | No paga en datacenter (0% Network Quality) |
-| Honeygain / EarnApp / TraffMonetizer | $0.01-0.03/día desde datacenter |
-| Datagram | `nats: Authorization Violation` server-side |
-| Mysterium | Mínimo retiro $2, inalcanzable desde 1 IP |
-
-### 💡 Aprendizajes clave
-1. **IP datacenter** es el principal limitante — Cloudflare bloquea, DePIN no paga, bandwidth sharing da $0.01/día
-2. **Sin capital** no se puede hacer trading, staking, ni ningún yield real
-3. **Exchanges grandes** (OKX, Bitget, Gate.io) NO usan Cloudflare — sus mini apps Telegram son accesibles
-4. **Airdrops Telegram** son la única oportunidad real desde VPS: gratis, 24/7, especulativos
-5. **Tunnelbroker IPv6** no ayuda — la reputación de subred es la misma (ASN Kamatera)
-6. **PC residencial** multiplica opciones (Grass $0.20-0.50/día + airdrops bloqueados) pero requiere 24/7
-
-## Estado actual de los bots en el VPS
-- Screen `farmbot`: OKX Racer + Tomarket (SESIÓN TELEGRAM INVALIDA — requiere re-auth)
-- Screen `p2p`: Bot P2P Binance (corriendo, mercado plano)
-- Screen `datagram`: Datagram (conectado pero no funcional)
-- Systemd `aioz-depin`: AIOZ (conectado, ocioso)
-- Sesión Telegram bloqueada por FloodWait ~22h (demasiados intentos de código)
-
-## Para reactivar sesión Telegram
-1. Esperar que termine FloodWait (~22h desde último intento)
-2. Usar script `sign_in_pipe.py` que envía código y espera input
-3. Pedir al usuario el código que le llega a su Telegram
-4. La sesión se guarda en `sessions/session_1.session`
-
-## Pendiente para explorar
-- [ ] Bitget Mini App (@BitgetOfficialBot) — daily check-in, puntos → USDT
-- [ ] Gate.io Mini App (@gate_official_bot) — Rewards Center
-- [ ] Escribir módulo Bitget para telegram-airdop framework
-
-## Conclusión dura
-Sin capital + IP datacenter + PC local apagado = no hay forma de generar $1/día estable.
-Lo único realista son airdrops Telegram especulativos (OKX Racer, Tomarket, Bitget, Gate.io).
-El VPS no cuesta nada (crédito $100) — dejarlo corriendo hasta julio no pierde nada.
+## Reglas Financieras y de Alertas
+1. **Comisiones Descontadas (0.80% total):**
+   * **0.50%** comisiones Maker de Binance (0.25% compra + 0.25% venta).
+   * **0.30%** comisión bancaria estimada por transferencias de Pago Móvil / BDV.
+2. **Filtro Inteligente de Monto:** Permite alternar mediante botones de Telegram entre montos de órdenes mínimas: Mayorista (0 Bs), $5 (4K Bs), $10 (8K Bs) y $20 (16K Bs).
+3. **Restricción de Alertas:** Para evitar alertas basura basadas en spreads ficticios por falta de liquidez en altcoins, el bot **únicamente envía alertas de oportunidad y recuperación para USDT y USDC**. (Las criptomonedas volátiles como BTC, ETH, BNB y SOL se analizan y guardan en base de datos pero no generan spam en Telegram).
+4. **Comparador Automático:** Si una alerta se genera en un mercado fraccionado ($5/$10/$20), el mensaje de Telegram calcula de forma automática un escenario comparativo vendiendo todo de golpe en el mercado Mayorista, y viceversa, para ayudar al operador a evaluar la mejor estrategia.
