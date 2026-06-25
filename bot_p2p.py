@@ -790,178 +790,288 @@ def procesar_mensaje(texto, chat_id):
     enviar_menu(chat_id)
 
 
+# ============================================================
+# AUTO-REFRESH DE PANELES (se actualizan sin presionar boton)
+# ============================================================
+AUTO_REFRESH = {}  # (chat_id, msg_id) -> {"data": str, "ticks": int}
+
+
+def _linea_ganancia(r):
+    v = f"${r['ganancia_usd']:.2f} USD"
+    if r.get('ganancia_ves'):
+        v += f" | Bs.{r['ganancia_ves']:.2f}"
+    return v
+
+
+def registrar_refresh(chat_id, msg_id, data):
+    AUTO_REFRESH[(chat_id, msg_id)] = {"data": data, "ticks": 5}
+
+
+def limpiar_refresh(chat_id, msg_id=None):
+    if msg_id:
+        AUTO_REFRESH.pop((chat_id, msg_id), None)
+    else:
+        for k in list(AUTO_REFRESH):
+            if k[0] == chat_id:
+                del AUTO_REFRESH[k]
+
+
+def _render_precio(chat_id, msg_id):
+    asset = CONFIG.get("default_crypto", "USDT")
+    r = calcular_margen(asset)
+    if r:
+        pri = ((r['venta'] - r['compra']) / r['compra']) * 100
+        rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+        taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+        taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+        editar_mensaje(chat_id, msg_id,
+            f"\U0001F4B0 *{asset} / VES* ({r['filtro']})\n\n"
+            f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
+            f"Compra Maker: {r['compra']:.2f} VES\n"
+            f"Venta Maker:  {r['venta']:.2f} VES\n"
+            f"Spread bruto: {pri:.2f}%\n"
+            f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
+            f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+            f"Compra Taker: {r['taker_compra']:.2f} VES\n"
+            f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
+            f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)")
+    else:
+        editar_mensaje(chat_id, msg_id, f"No se pudieron obtener precios de {asset}.")
+    registrar_refresh(chat_id, msg_id, "precio")
+
+
+def _render_arbitraje(chat_id, msg_id):
+    resultados = []
+    for asset in ASSETS_VES:
+        r = calcular_margen(asset)
+        if r:
+            resultados.append(r)
+        time.sleep(0.5)
+    if not resultados:
+        editar_mensaje(chat_id, msg_id, "No se pudieron obtener datos.")
+        registrar_refresh(chat_id, msg_id, "arbitraje")
+        return
+    resultados.sort(key=lambda x: x["margen"], reverse=True)
+    best = resultados[0]
+    worst = resultados[-1] if len(resultados) > 1 else best
+    rentables = [r for r in resultados if r['margen'] > 0]
+    texto = (
+        f"\U0001F4CA *Multi-cripto* ({nombre_filtro()})\n"
+        f"Comisiones totales: {COMISION_TOTAL*100:.2f}%\n\n")
+    if rentables:
+        texto += f"\u2705 *{len(rentables)} RENTABLE(S):*\n"
+        for r in rentables:
+            texto += f"  {r['asset']}: {r['margen']:+.2f}% (${r['ganancia_usd']:.2f})\n"
+    else:
+        texto += "\u274C *Ninguno rentable ahora*\n"
+    texto += (
+        f"\n\U0001F3C6 *Mejor:* {best['asset']} ({best['margen']:+.2f}%)\n"
+        f"\u26A0 *Peor:* {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
+        f"Selecciona para detalle y predeterminar:\n")
+    kb = {"inline_keyboard": []}
+    for r in resultados:
+        icono = "\u2705" if r['margen'] > 0 else "\u274C"
+        label = f"{icono} {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
+        if r == best:
+            label = f"\U0001F3C6 {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
+        kb["inline_keyboard"].append([{"text": label, "callback_data": f"detalle_{r['asset']}"}])
+    kb["inline_keyboard"].append([{"text": "\U0001F519 Volver", "callback_data": "menu"}])
+    _tg_call("editMessageText", {
+        "chat_id": chat_id, "message_id": msg_id,
+        "text": texto, "parse_mode": "Markdown",
+        "reply_markup": json.dumps(kb)
+    }, ignore_400=True)
+    registrar_refresh(chat_id, msg_id, "arbitraje")
+
+
+def _render_combo(chat_id, msg_id):
+    r = calcular_margen_usdt_usdc()
+    if r:
+        rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+        taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+        taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+        kb = json.dumps({
+            "inline_keyboard": [
+                [{"text": "🏠 Inicio", "callback_data": "menu"},
+                 {"text": "🔄 Actualizar", "callback_data": "combo"}]
+            ]
+        })
+        _tg_call("editMessageText", {
+            "chat_id": chat_id, "message_id": msg_id,
+            "text": (
+                f"\U0001F500 *Combo USDT \u2794 USDC / VES* ({r['filtro']})\n\n"
+                f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
+                f"Compra Maker (USDT): {r['compra_usdt']:.2f} VES\n"
+                f"Venta Maker (USDC):  {r['venta_usdc']:.2f} VES\n"
+                f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
+                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+                f"Compra Taker (USDT): {r['taker_compra_usdt']:.2f} VES\n"
+                f"Venta Taker (USDC):  {r['taker_venta_usdc']:.2f} VES\n"
+                f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+                f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
+                f"📌 Compra USDT (Maker) y venta USDC (Maker)."
+            ),
+            "parse_mode": "Markdown", "reply_markup": kb
+        }, ignore_400=True)
+    else:
+        editar_mensaje(chat_id, msg_id, "No se pudieron obtener precios del combo.")
+    registrar_refresh(chat_id, msg_id, "combo")
+
+
+def _render_detalle(chat_id, msg_id, asset):
+    CONFIG["default_crypto"] = asset
+    guardar_config_local()
+    r = calcular_margen(asset)
+    if not r:
+        editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
+        registrar_refresh(chat_id, msg_id, f"detalle_{asset}")
+        return
+    spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
+    rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+    best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
+    estrella = " \U0001F3C6" if asset == best_asset else ""
+    taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+    taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+    kb = json.dumps({
+        "inline_keyboard": [
+            [{"text": "🏠 Inicio", "callback_data": "menu"},
+             {"text": "🔙 Volver", "callback_data": "arbitraje"}],
+            [{"text": "🔄 Actualizar", "callback_data": f"detalle_{asset}"}]
+        ]
+    })
+    _tg_call("editMessageText", {
+        "chat_id": chat_id, "message_id": msg_id,
+        "text": (
+            f"\U0001F4B0 *{asset} / VES*{estrella} ({r['filtro']})\n\n"
+            f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
+            f"Compra Maker: {r['compra']:.2f} VES\n"
+            f"Venta Maker:  {r['venta']:.2f} VES\n"
+            f"Spread bruto: {spread_bruto:.2f}%\n"
+            f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
+            f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+            f"Compra Taker: {r['taker_compra']:.2f} VES\n"
+            f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
+            f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
+            f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
+        ),
+        "parse_mode": "Markdown", "reply_markup": kb
+    }, ignore_400=True)
+    registrar_refresh(chat_id, msg_id, f"detalle_{asset}")
+
+
+def _render_estado(chat_id, msg_id):
+    lines = [
+        f"\U0001F4CB *Estado*",
+        f"Capital: ${CONFIG['capital']:.0f}",
+        f"Umbral: {CONFIG['margen_objetivo']}%",
+        f"Filtro: {nombre_filtro()}",
+        f"Comisiones: {COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n",
+    ]
+    rentables = 0
+    for a in ASSETS_VES:
+        u = ULTIMOS.get(a)
+        if u:
+            icono = "\u2705" if u['margen'] > 0 else "\u274C"
+            lines.append(f"{icono} {a}: {u['margen']:+.2f}%")
+            if u['margen'] > 0:
+                rentables += 1
+    if rentables > 0:
+        lines.append(f"\n\U0001F4B0 *{rentables} activo(s) rentable(s)*")
+    else:
+        lines.append(f"\n\u23F3 Sin oportunidades ahora")
+    editar_mensaje(chat_id, msg_id, "\n".join(lines))
+    registrar_refresh(chat_id, msg_id, "status")
+
+
+def _render_dex(chat_id, msg_id):
+    msg = f"🌌 *Arbitraje DEX Multi-Red* (Capital: ${CONFIG['capital']:.0f})\n\n"
+    fallos = []
+    for nk in DEX_NETWORKS:
+        r = calcular_arbitraje_dex(nk)
+        if r:
+            icono = "🟢" if r["ganancia_neta"] > 0 else "🔴"
+            msg += (f"{icono} *{r['network']}* ({r['nombre']})\n"
+                    f"   Spot: ${r['spot']:.4f} | DEX: ${r['dex']:.4f}\n"
+                    f"   Spread: {r['pct_bruto']:+.2f}% | Costos: ${r['costos']:.3f}\n"
+                    f"   *Neto: ${r['ganancia_neta']:.4f}* ({r['pct_neto']:+.2f}%)\n"
+                    f"   Wallet: {r['wallet']} | DEX: {r['dex_principales']}\n\n")
+        else:
+            fallos.append(nk)
+        time.sleep(0.3)
+    if fallos:
+        msg += f"⚠️ Sin datos: {', '.join(fallos)}\n"
+    if not msg.strip(" *\n"):
+        msg = "⚠️ No se pudieron obtener precios de ninguna red."
+    else:
+        msg += "\n_Tip: Usa el botón Operar de Phantom para hacer swap._"
+    kb = json.dumps({
+        "inline_keyboard": [
+            [{"text": "🏠 Inicio", "callback_data": "menu"},
+             {"text": "🔄 Actualizar", "callback_data": "dex_multired"}]
+        ]
+    })
+    _tg_call("editMessageText", {
+        "chat_id": chat_id, "message_id": msg_id,
+        "text": msg, "parse_mode": "Markdown",
+        "reply_markup": kb
+    }, ignore_400=True)
+    registrar_refresh(chat_id, msg_id, "dex_multired")
+
+
+def _refrescar_paneles():
+    for (chat_id, msg_id), info in list(AUTO_REFRESH.items()):
+        info["ticks"] -= 1
+        if info["ticks"] <= 0:
+            del AUTO_REFRESH[(chat_id, msg_id)]
+            continue
+        cb_data = info["data"]
+        try:
+            if cb_data == "precio":
+                _render_precio(chat_id, msg_id)
+            elif cb_data == "arbitraje":
+                _render_arbitraje(chat_id, msg_id)
+            elif cb_data == "combo":
+                _render_combo(chat_id, msg_id)
+            elif cb_data.startswith("detalle_"):
+                asset = cb_data.split("_", 1)[1]
+                _render_detalle(chat_id, msg_id, asset)
+            elif cb_data == "status":
+                _render_estado(chat_id, msg_id)
+            elif cb_data == "dex_multired":
+                _render_dex(chat_id, msg_id)
+        except Exception as e:
+            print(f"Error refrescando {cb_data}: {e}", flush=True)
+
+
+# ============================================================
+# PROCESADOR DE CALLBACKS
+# ============================================================
 def procesar_callback(cq):
     chat_id = cq["message"]["chat"]["id"]
     msg_id = cq["message"]["message_id"]
     data = cq["data"]
     responder_callback(cq["id"])
 
-    def _linea_ganancia(r):
-        v = f"${r['ganancia_usd']:.2f} USD"
-        if r.get('ganancia_ves'):
-            v += f" | Bs.{r['ganancia_ves']:.2f}"
-        return v
-
     if data == "precio":
-        asset = CONFIG.get("default_crypto", "USDT")
-        r = calcular_margen(asset)
-        if r:
-            pri = ((r['venta'] - r['compra']) / r['compra']) * 100
-            rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
-            
-            # Taker calculations
-            taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
-            taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
-
-            editar_mensaje(chat_id, msg_id,
-                f"\U0001F4B0 *{asset} / VES* ({r['filtro']})\n\n"
-                f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
-                f"Compra Maker: {r['compra']:.2f} VES\n"
-                f"Venta Maker:  {r['venta']:.2f} VES\n"
-                f"Spread bruto: {pri:.2f}%\n"
-                f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
-                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
-                f"\u26A0 *MODO TAKER (Instantáneo)*\n"
-                f"Compra Taker: {r['taker_compra']:.2f} VES\n"
-                f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
-                f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
-                f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
-                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)"
-            )
-        else:
-            editar_mensaje(chat_id, msg_id, f"No se pudieron obtener precios de {asset}.")
+        _render_precio(chat_id, msg_id)
 
     elif data == "arbitraje":
-        resultados = []
-        for asset in ASSETS_VES:
-            r = calcular_margen(asset)
-            if r:
-                resultados.append(r)
-            time.sleep(0.5)
-        if not resultados:
-            editar_mensaje(chat_id, msg_id, "No se pudieron obtener datos.")
-            return
-        resultados.sort(key=lambda x: x["margen"], reverse=True)
-
-        best = resultados[0]
-        worst = resultados[-1] if len(resultados) > 1 else best
-        rentables = [r for r in resultados if r['margen'] > 0]
-
-        texto = (
-            f"\U0001F4CA *Multi-cripto* ({nombre_filtro()})\n"
-            f"Comisiones totales: {COMISION_TOTAL*100:.2f}%\n\n"
-        )
-        if rentables:
-            texto += f"\u2705 *{len(rentables)} RENTABLE(S):*\n"
-            for r in rentables:
-                texto += f"  {r['asset']}: {r['margen']:+.2f}% (${r['ganancia_usd']:.2f})\n"
-        else:
-            texto += "\u274C *Ninguno rentable ahora*\n"
-
-        texto += (
-            f"\n\U0001F3C6 *Mejor:* {best['asset']} ({best['margen']:+.2f}%)\n"
-            f"\u26A0 *Peor:* {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
-            f"Selecciona para detalle y predeterminar:\n"
-        )
-        kb = {"inline_keyboard": []}
-        for r in resultados:
-            icono = "\u2705" if r['margen'] > 0 else "\u274C"
-            label = f"{icono} {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
-            if r == best:
-                label = f"\U0001F3C6 {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
-            kb["inline_keyboard"].append([
-                {"text": label, "callback_data": f"detalle_{r['asset']}"}
-            ])
-        kb["inline_keyboard"].append([{"text": "\U0001F519 Volver", "callback_data": "menu"}])
-        _tg_call("editMessageText", {
-            "chat_id": chat_id, "message_id": msg_id,
-            "text": texto, "parse_mode": "Markdown",
-            "reply_markup": json.dumps(kb)
-        }, ignore_400=True)
+        _render_arbitraje(chat_id, msg_id)
 
     elif data == "combo":
-        r = calcular_margen_usdt_usdc()
-        if r:
-            rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
-            taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
-            taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
-            
-            kb = json.dumps({
-                "inline_keyboard": [
-                    [{"text": "🏠 Inicio", "callback_data": "menu"},
-                     {"text": "🔄 Actualizar", "callback_data": "combo"}]
-                ]
-            })
-            _tg_call("editMessageText", {
-                "chat_id": chat_id, "message_id": msg_id,
-                "text": (
-                    f"\U0001F500 *Combo USDT \u2794 USDC / VES* ({r['filtro']})\n\n"
-                    f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
-                    f"Compra Maker (USDT): {r['compra_usdt']:.2f} VES\n"
-                    f"Venta Maker (USDC):  {r['venta_usdc']:.2f} VES\n"
-                    f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
-                    f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
-                    f"\u26A0 *MODO TAKER (Instantáneo)*\n"
-                    f"Compra Taker (USDT): {r['taker_compra_usdt']:.2f} VES\n"
-                    f"Venta Taker (USDC):  {r['taker_venta_usdc']:.2f} VES\n"
-                    f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
-                    f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
-                    f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
-                    f"📌 Compra USDT (Maker) y venta USDC (Maker)."
-                ),
-                "parse_mode": "Markdown",
-                "reply_markup": kb
-            }, ignore_400=True)
-        else:
-            editar_mensaje(chat_id, msg_id, "No se pudieron obtener precios del combo.")
+        _render_combo(chat_id, msg_id)
 
     elif data.startswith("detalle_"):
         asset = data.split("_", 1)[1]
-        
-        # Guardar como criptomoneda predeterminada
-        CONFIG["default_crypto"] = asset
-        guardar_config_local()
-
-        r = calcular_margen(asset)
-        if not r:
-            editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
-            return
-        spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
-        rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
-        best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
-        estrella = " \U0001F3C6" if asset == best_asset else ""
-
-        # Taker calculations
-        taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
-        taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
-
-        kb = json.dumps({
-            "inline_keyboard": [
-                [{"text": "🏠 Inicio", "callback_data": "menu"},
-                 {"text": "🔙 Volver", "callback_data": "arbitraje"}],
-                [{"text": "🔄 Actualizar", "callback_data": f"detalle_{asset}"}]
-            ]
-        })
-        _tg_call("editMessageText", {
-            "chat_id": chat_id, "message_id": msg_id,
-            "text": (
-                f"\U0001F4B0 *{asset} / VES*{estrella} ({r['filtro']})\n\n"
-                f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
-                f"Compra Maker: {r['compra']:.2f} VES\n"
-                f"Venta Maker:  {r['venta']:.2f} VES\n"
-                f"Spread bruto: {spread_bruto:.2f}%\n"
-                f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
-                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
-                f"\u26A0 *MODO TAKER (Instantáneo)*\n"
-                f"Compra Taker: {r['taker_compra']:.2f} VES\n"
-                f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
-                f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
-                f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
-                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
-                f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
-            ),
-            "parse_mode": "Markdown", "reply_markup": kb
-        })
+        _render_detalle(chat_id, msg_id, asset)
 
     elif data == "umbral":
         ESTADOS_USUARIO[chat_id] = {"esperando": "umbral"}
@@ -1071,70 +1181,17 @@ def procesar_callback(cq):
         )
 
     elif data == "status":
-        lines = [
-            f"\U0001F4CB *Estado*",
-            f"Capital: ${CONFIG['capital']:.0f}",
-            f"Umbral: {CONFIG['margen_objetivo']}%",
-            f"Filtro: {nombre_filtro()}",
-            f"Comisiones: {COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n",
-        ]
-        rentables = 0
-        for a in ASSETS_VES:
-            u = ULTIMOS.get(a)
-            if u:
-                icono = "\u2705" if u['margen'] > 0 else "\u274C"
-                lines.append(f"{icono} {a}: {u['margen']:+.2f}%")
-                if u['margen'] > 0:
-                    rentables += 1
-        if rentables > 0:
-            lines.append(f"\n\U0001F4B0 *{rentables} activo(s) rentable(s)*")
-        else:
-            lines.append(f"\n\u23F3 Sin oportunidades ahora")
-        editar_mensaje(chat_id, msg_id, "\n".join(lines))
+        _render_estado(chat_id, msg_id)
 
     elif data == "dex_multired":
         try:
-            msg = f"🌌 *Arbitraje DEX Multi-Red* (Capital: ${CONFIG['capital']:.0f})\n\n"
-            fallos = []
-            for nk in DEX_NETWORKS:
-                r = calcular_arbitraje_dex(nk)
-                if r:
-                    icono = "🟢" if r["ganancia_neta"] > 0 else "🔴"
-                    msg += (
-                        f"{icono} *{r['network']}* ({r['nombre']})\n"
-                        f"   Spot: ${r['spot']:.4f} | DEX: ${r['dex']:.4f}\n"
-                        f"   Spread: {r['pct_bruto']:+.2f}% | Costos: ${r['costos']:.3f}\n"
-                        f"   *Neto: ${r['ganancia_neta']:.4f}* ({r['pct_neto']:+.2f}%)\n"
-                        f"   Wallet: {r['wallet']} | DEX: {r['dex_principales']}\n\n"
-                    )
-                else:
-                    fallos.append(nk)
-                time.sleep(0.3)
-
-            if fallos:
-                msg += f"⚠️ Sin datos: {', '.join(fallos)}\n"
-            if not msg.strip(" *\n"):
-                msg = "⚠️ No se pudieron obtener precios de ninguna red."
-            else:
-                msg += "\n_Tip: Usa el botón Operar de Phantom para hacer swap._"
-
-            kb = json.dumps({
-                "inline_keyboard": [
-                    [{"text": "🏠 Inicio", "callback_data": "menu"},
-                     {"text": "🔄 Actualizar", "callback_data": "dex_multired"}]
-                ]
-            })
-            _tg_call("editMessageText", {
-                "chat_id": chat_id, "message_id": msg_id,
-                "text": msg, "parse_mode": "Markdown",
-                "reply_markup": kb
-            }, ignore_400=True)
+            _render_dex(chat_id, msg_id)
         except Exception as e:
             print(f"Error en callback dex_multired: {e}", flush=True)
             editar_mensaje(chat_id, msg_id, "Error al calcular arbitraje DEX Multi-Red.")
 
     elif data == "menu":
-
+        limpiar_refresh(chat_id)
         editar_mensaje(chat_id, msg_id,
             f"\U0001F916 *Bot P2P Venezuela*\n"
             f"Capital: ${CONFIG['capital']:.0f} | Umbral: {CONFIG['margen_objetivo']}%\n"
@@ -1395,6 +1452,7 @@ def loop_monitoreo():
                     f"\u23F1 *Heartbeat* - {ciclo} ciclos\n"
                     f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)"
                 ))
+            _refrescar_paneles()
         except Exception as e:
             print(f"Error: {e}", flush=True)
         time.sleep(60)
