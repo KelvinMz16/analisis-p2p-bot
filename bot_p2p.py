@@ -91,8 +91,8 @@ _config_local = cargar_config_local()
 CONFIG = {
     "capital": float(_config_local.get("capital", os.getenv("CAPITAL", "100"))),
     "margen_objetivo": float(_config_local.get("margen_objetivo", os.getenv("UMBRAL", "0.8"))),
-    "monto_filtro": int(_config_local.get("monto_filtro", 0)),
-    "default_crypto": _config_local.get("default_crypto", "USDT"),
+    "monto_filtro": int(_config_local.get("monto_filtro", os.getenv("MONTO_FILTRO", "0"))),
+    "default_crypto": _config_local.get("default_crypto", os.getenv("DEFAULT_CRYPTO", "USDT")),
 }
 
 # Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
@@ -129,6 +129,8 @@ def guardar_config_local():
             json.dump(CONFIG, f)
         _sync_hf_secret("CAPITAL", str(CONFIG["capital"]))
         _sync_hf_secret("UMBRAL", str(CONFIG["margen_objetivo"]))
+        _sync_hf_secret("MONTO_FILTRO", str(CONFIG["monto_filtro"]))
+        _sync_hf_secret("DEFAULT_CRYPTO", str(CONFIG["default_crypto"]))
     except Exception as e:
         print(f"Error guardando config local: {e}", flush=True)
 
@@ -1465,6 +1467,8 @@ if __name__ == "__main__":
     print("  Bot P2P Binance - Venezuela", flush=True)
     print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
     print("=" * 60, flush=True)
+
+    guardar_config_local()
 
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
