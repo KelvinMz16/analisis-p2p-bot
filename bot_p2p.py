@@ -5,6 +5,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -118,6 +119,10 @@ MARGE_ANTERIOR = {}  # asset -> ultimo margen, para detectar recuperacion
 ALERTA_ENVIADA = set()  # assets con alerta ya enviada en este ciclo positivo
 VPS_EXPIRY = date(2026, 7, 24)
 VPS_EXPIRY_NOTIFIED = False
+
+# Hourly aggregation containers (populated from Supabase history)
+compras_por_hora = defaultdict(list)  # key: hour 0-23, value: list of buy prices
+ventas_por_hora = defaultdict(list)   # key: hour 0-23, value: list of sell prices
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -424,17 +429,47 @@ def analizar_opciones(trans_amount=None):
 
 
 def analizar_historico_horarios():
-        # Cargar historial desde Supabase para análisis de horarios
+    """Carga el historial de Supabase y agrupa compras/ventas por hora."""
+    # Cargar historial desde Supabase
+    try:
+        registros = supabase_select_all()
+    except Exception as e:
+        print(f"Error al cargar historial de Supabase: {e}", flush=True)
+        registros = []
+
+    if not registros:
+        return None
+
+    # Reiniciar los contenedores antes de poblarlos
+    compras_por_hora.clear()
+    ventas_por_hora.clear()
+
+    for rec in registros:
+        # Soporte para campo 'fecha' o 'created_at'
+        timestamp = rec.get("fecha") or rec.get("created_at")
+        if not timestamp:
+            continue
         try:
-            registros = supabase_select_all()
-        except Exception as e:
-            print(f"Error al cargar historial de Supabase: {e}", flush=True)
-            registros = []
-        lineas = [json.dumps(r) + "\n" for r in registros]
-        if not lineas:
-            return None
-        # El resto del código sigue usando 'lineas' como antes
-        # (se procesan líneas JSON).
+            if isinstance(timestamp, str):
+                # Eliminar sufijo Z o zona horaria si es necesario
+                ts_clean = timestamp.replace("Z", "+00:00")
+                hour = datetime.fromisoformat(ts_clean).hour
+            else:
+                hour = int(timestamp)
+        except Exception:
+            continue
+        compra = rec.get("compra") or rec.get("maker_compra") or rec.get("precio_compra")
+        venta = rec.get("venta") or rec.get("maker_venta") or rec.get("precio_venta")
+        if compra is not None:
+            try:
+                compras_por_hora[hour].append(float(compra))
+            except (ValueError, TypeError):
+                pass
+        if venta is not None:
+            try:
+                ventas_por_hora[hour].append(float(venta))
+            except (ValueError, TypeError):
+                pass
 
     resumen = {}
     for h in range(24):
@@ -446,10 +481,10 @@ def analizar_historico_horarios():
                 "avg_venta": sum(v_list) / len(v_list),
                 "muestras": len(c_list)
             }
-            
+
     if not resumen:
         return None
-        
+
     return resumen
 
 
@@ -1068,11 +1103,37 @@ def loop_monitoreo():
 
 
 
+# ============================================================
+# HEALTH SERVER (requerido por Hugging Face Spaces)
+# ============================================================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass  # Silenciar logs del servidor HTTP
+
+
+def _run_health_server():
+    try:
+        server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
+        print("Health server iniciado en 0.0.0.0:8080", flush=True)
+        server.serve_forever()
+    except Exception as e:
+        print(f"Health server error: {e}", flush=True)
+
+
 if __name__ == "__main__":
     print("=" * 60, flush=True)
     print("  Bot P2P Binance - Venezuela", flush=True)
     print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
     print("=" * 60, flush=True)
+
+    # Iniciar health server en background (puerto 8080 para HF Spaces)
+    threading.Thread(target=_run_health_server, daemon=True).start()
 
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
