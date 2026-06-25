@@ -940,7 +940,7 @@ def polling_telegram():
 
 
 # ============================================================
-# SERVIDOR WEB (UptimeRobot)
+# HEALTH SERVER (requerido por Hugging Face Spaces)
 # ============================================================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -951,7 +951,15 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-threading.Thread(target=lambda: HTTPServer(("0.0.0.0", 8080), HealthHandler).serve_forever(), daemon=True).start()
+def _run_health_server():
+    try:
+        server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
+        print("Health server iniciado en 0.0.0.0:8080", flush=True)
+        server.serve_forever()
+    except Exception as e:
+        print(f"Health server error: {e}", flush=True)
+
+threading.Thread(target=_run_health_server, daemon=True).start()
 # ============================================================
 
 
@@ -1124,37 +1132,11 @@ def loop_monitoreo():
 
 
 
-# ============================================================
-# HEALTH SERVER (requerido por Hugging Face Spaces)
-# ============================================================
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-    def log_message(self, format, *args):
-        pass  # Silenciar logs del servidor HTTP
-
-
-def _run_health_server():
-    try:
-        server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
-        print("Health server iniciado en 0.0.0.0:8080", flush=True)
-        server.serve_forever()
-    except Exception as e:
-        print(f"Health server error: {e}", flush=True)
-
-
 if __name__ == "__main__":
     print("=" * 60, flush=True)
     print("  Bot P2P Binance - Venezuela", flush=True)
     print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
     print("=" * 60, flush=True)
-
-    # Iniciar health server en background (puerto 8080 para HF Spaces)
-    threading.Thread(target=_run_health_server, daemon=True).start()
 
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
