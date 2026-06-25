@@ -377,15 +377,16 @@ def obtener_precio_dex_solana():
 
 
 def obtener_precio_spot_solana():
-    """Obtiene el precio de SOL/USDT spot en Binance."""
-    url = "https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT"
+    """Obtiene el precio de SOL en CoinGecko (que no bloquea la IP de HF y es en vivo)."""
+    url = "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
-        return float(resp.json().get("price", 0))
+        return float(resp.json().get("solana", {}).get("usd", 0))
     except Exception as e:
-        print(f"[Binance/SOL] Error: {e}", flush=True)
+        print(f"[CoinGecko/SOL] Error: {e}", flush=True)
     return None
+
 
 
 
