@@ -1,0 +1,4 @@
+huggingface:
+  repo_type: space
+python_version: "3.11"
+entrypoint: python bot_p2p.py

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import ssl as ssl_mod
 import threading
 import time
@@ -157,6 +158,11 @@ ALERTA_ENVIADA_DEX = set()  # redes DEX con alerta ya enviada
 MARGE_ANTERIOR_DEX = {}     # network_key -> ultimo margen neto DEX
 VPS_EXPIRY = date(2026, 7, 24)
 VPS_EXPIRY_NOTIFIED = False
+
+# Monitoreo BCV via @subastasBCV
+_BCV_BDV_ACTIVO = None       # True/False/None
+_BCV_BDV_ULTIMOS_DATOS = {}  # {tasa, minimo, maximo, hora}
+_BCV_ULTIMO_POST_ID = None   # ultimo post_id procesado
 
 # Hourly aggregation containers (populated from Supabase history)
 compras_por_hora = defaultdict(list)  # key: hour 0-23, value: list of buy prices
@@ -1253,8 +1259,73 @@ threading.Thread(target=_run_health_server, daemon=True).start()
 _ESTADO_SUENO = None  # "dormido" | "despierto" | None
 
 
+def scrape_subastasbcv():
+    """Scrapea @subastasBCV en busca de estado de intervencion de BDV.
+    Retorna dict con keys: activo(bool), tasa(str), minimo(str), maximo(str), hora(str)
+    o None si no encuentra datos de BDV."""
+    global _BCV_ULTIMO_POST_ID
+    try:
+        r = requests.get("https://t.me/s/subastasBCV", timeout=15)
+        html = r.text
+
+        # Buscar todos los posts con data-post
+        posts = re.findall(
+            r'<div class="tgme_widget_message_wrap[^"]*">.*?data-post="([^"]+)".*?'
+            r'<div class="tgme_widget_message_text[^"]*" dir="auto">(.*?)</div>',
+            html, re.DOTALL
+        )
+
+        for post_id, msg_html in posts:
+            msg = re.sub(r'<[^>]+>', '', msg_html)
+            msg = msg.replace('&#36;', '$').replace('&#036;', '$')
+            msg = msg.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+            msg = msg.replace('&#39;', "'").replace('&quot;', '"')
+
+            if "BDV" not in msg and "BANCO DE VENEZUELA" not in msg:
+                continue
+
+            # Activo
+            if "INTERVENCI" in msg and "ACTIVA" in msg:
+                tasa = re.search(r'TASA:\s*Bs\.?\s*([\d.,]+)', msg)
+                minimo = re.search(r'M[IÍ]NIMO:\s*(\d[\d.]*)', msg)
+                maximo = re.search(r'M[AÁ]XIMO:\s*(\d[\d.]*)', msg)
+                hora = re.search(r'HORA:\s*([\d:]+)', msg)
+
+                data = {
+                    "activo": True,
+                    "tasa": tasa.group(1) if tasa else "",
+                    "minimo": minimo.group(1) if minimo else "",
+                    "maximo": maximo.group(1) if maximo else "",
+                    "hora": hora.group(1) if hora else "",
+                    "post_id": post_id,
+                }
+
+                if data["post_id"] != _BCV_ULTIMO_POST_ID:
+                    _BCV_ULTIMO_POST_ID = data["post_id"]
+                    return data
+
+            # Cerrada
+            if "INTERVENCI" in msg and "CERRADA" in msg:
+                data = {
+                    "activo": False,
+                    "tasa": "",
+                    "minimo": "",
+                    "maximo": "",
+                    "hora": "",
+                    "post_id": post_id,
+                }
+                if data["post_id"] != _BCV_ULTIMO_POST_ID:
+                    _BCV_ULTIMO_POST_ID = data["post_id"]
+                    return data
+
+        return None
+    except Exception as e:
+        print(f"Error scraping @subastasBCV: {e}", flush=True)
+        return None
+
+
 def loop_monitoreo():
-    global _ESTADO_SUENO, VPS_EXPIRY_NOTIFIED
+    global _ESTADO_SUENO, VPS_EXPIRY_NOTIFIED, _BCV_BDV_ACTIVO
     print("  Monitoreo cada 60s...", flush=True)
     ciclo = 0
     while True:
@@ -1284,6 +1355,39 @@ def loop_monitoreo():
 
             if _ESTADO_SUENO is None:
                 _ESTADO_SUENO = "despierto" if activo else "dormido"
+
+            # ============================================================
+            # MONITOREO INTERVENCION BCV via @subastasBCV
+            # ============================================================
+            bcv = scrape_subastasbcv()
+            if bcv is not None:
+                prev = _BCV_BDV_ACTIVO
+                _BCV_BDV_ACTIVO = bcv["activo"]
+                if bcv["activo"]:
+                    _BCV_BDV_ULTIMOS_DATOS = bcv
+                if prev is not None and bcv["activo"] != prev:
+                    if bcv["activo"]:
+                        texto = (
+                            f"\U0001F3E6\U0001F7E2 *BDV - Intervenci\u00f3n ACTIVA*\n"
+                            f"Tasa: *Bs. {bcv['tasa']}*\n"
+                            f"M\u00ednimo: *{bcv['minimo']}$* | M\u00e1ximo: *{bcv['maximo']}$*\n"
+                            f"Hora: {bcv['hora']} VE\n"
+                            f"Fuente: @subastasBCV"
+                        )
+                    else:
+                        texto = (
+                            f"\U0001F3E6\U0001F534 *BDV - Intervenci\u00f3n CERRADA*\n"
+                            f"\u00daltimos datos: Bs. {_BCV_BDV_ULTIMOS_DATOS.get('tasa', '?')} "
+                            f"| {_BCV_BDV_ULTIMOS_DATOS.get('minimo', '?')}$ - {_BCV_BDV_ULTIMOS_DATOS.get('maximo', '?')}$\n"
+                            f"Fuente: @subastasBCV"
+                        )
+                    _tg_call("sendMessage", {
+                        "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                        "text": texto
+                    })
+                    print(f">>> BCV BDV cambio: {'ACTIVA' if bcv['activo'] else 'CERRADA'} <<<", flush=True)
+                if prev is None:
+                    _BCV_BDV_ACTIVO = bcv["activo"]
 
             mejores = []
             for asset in ASSETS_VES:
