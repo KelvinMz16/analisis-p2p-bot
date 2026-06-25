@@ -935,9 +935,14 @@ def procesar_callback(cq):
     elif data == "historial":
         try:
             lineas = []
-            if os.path.exists(HISTORIAL_PATH):
-                with open(HISTORIAL_PATH, "r") as f:
-                    lineas = f.readlines()
+            try:
+                registros = supabase_select_all()
+                lineas = [json.dumps(r) + "\n" for r in registros]
+            except Exception as e:
+                print(f"Supabase lectura fallo, usando JSONL: {e}", flush=True)
+                if os.path.exists(HISTORIAL_PATH):
+                    with open(HISTORIAL_PATH, "r") as f:
+                        lineas = f.readlines()
             if not lineas:
                 editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
                 return
@@ -1205,10 +1210,14 @@ def loop_monitoreo():
                 for r in mejores:
                     registro[r["asset"]] = {"compra": r["compra"], "venta": r["venta"], "margen": r["margen"]}
                 try:
+                    supabase_upsert(registro)
+                except Exception as e:
+                    print(f"Error guardando en Supabase: {e}", flush=True)
+                try:
                     with open(HISTORIAL_PATH, "a") as f:
                         f.write(json.dumps(registro) + "\n")
                 except Exception as e:
-                    print(f"Error guardando historial: {e}", flush=True)
+                    print(f"Error guardando JSONL: {e}", flush=True)
 
             if not activo:
                 time.sleep(60)
