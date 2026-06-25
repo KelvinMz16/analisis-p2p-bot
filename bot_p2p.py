@@ -15,6 +15,43 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 NAMESPACE = "KelvinMz/VesArbitrajeP2P"
 
+# Supabase configuration (read from HF Secrets / environment variables)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "historical_prices")
+
+def supabase_upsert(record):
+    """Insert a record into the Supabase table.
+    The function uses the REST API with the provided URL and API key.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Supabase credentials not set in environment")
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    resp = requests.post(url, json=record, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+def supabase_select_all():
+    """Retrieve all records from the Supabase table.
+    Returns a list of dicts.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("Supabase credentials not set in environment")
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    resp = requests.get(url, headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
 CONFIG_PATH = "config_usuario.json"
 
 
@@ -387,28 +424,17 @@ def analizar_opciones(trans_amount=None):
 
 
 def analizar_historico_horarios():
-    if not os.path.exists(HISTORIAL_PATH):
-        return None
-    
-    # Agrupar datos por hora (0-23)
-    compras_por_hora = {i: [] for i in range(24)}
-    ventas_por_hora = {i: [] for i in range(24)}
-    
-    try:
-        with open(HISTORIAL_PATH, "r") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    dt = datetime.fromisoformat(data["ts"])
-                    hour = dt.hour
-                    if "USDT" in data:
-                        compras_por_hora[hour].append(data["USDT"]["compra"])
-                        ventas_por_hora[hour].append(data["USDT"]["venta"])
-                except Exception:
-                    continue
-    except Exception as e:
-        print(f"Error analizando historial de horarios: {e}", flush=True)
-        return None
+        # Cargar historial desde Supabase para análisis de horarios
+        try:
+            registros = supabase_select_all()
+        except Exception as e:
+            print(f"Error al cargar historial de Supabase: {e}", flush=True)
+            registros = []
+        lineas = [json.dumps(r) + "\n" for r in registros]
+        if not lineas:
+            return None
+        # El resto del código sigue usando 'lineas' como antes
+        # (se procesan líneas JSON).
 
     resumen = {}
     for h in range(24):
@@ -713,11 +739,13 @@ def procesar_callback(cq):
 
     elif data == "historial":
         try:
-            if not os.path.exists(HISTORIAL_PATH):
-                editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
-                return
-            with open(HISTORIAL_PATH) as f:
-                lineas = f.readlines()
+            # Obtener historial desde Supabase
+            try:
+                registros = supabase_select_all()
+            except Exception as e:
+                print(f"Error al leer historial de Supabase: {e}", flush=True)
+                registros = []
+            lineas = [json.dumps(r) + "\n" for r in registros]
             if not lineas:
                 editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
                 return
@@ -921,26 +949,11 @@ def loop_monitoreo():
                 registro = {"ts": datetime.now(VENEZUELA_TZ).isoformat()}
                 for r in mejores:
                     registro[r["asset"]] = {"compra": r["compra"], "venta": r["venta"], "margen": r["margen"]}
+                # Persistencia en Supabase en lugar de archivo local
                 try:
-                    # Cargar y podar registros de más de 7 días
-                    lineas = []
-                    if os.path.exists(HISTORIAL_PATH):
-                        with open(HISTORIAL_PATH, "r") as f:
-                            lineas = f.readlines()
-                    lineas.append(json.dumps(registro) + "\n")
-                    
-                    limite = datetime.now(VENEZUELA_TZ) - timedelta(days=7)
-                    lineas_filtradas = []
-                    for l in lineas:
-                        try:
-                            d = json.loads(l)
-                            dt_ts = datetime.fromisoformat(d["ts"])
-                            if dt_ts >= limite:
-                                lineas_filtradas.append(l)
-                        except Exception:
-                            continue
-                    with open(HISTORIAL_PATH, "w") as f:
-                        f.writelines(lineas_filtradas)
+                    supabase_upsert(registro)
+                except Exception as e:
+                    print(f"Error al guardar en Supabase: {e}", flush=True)
                 except Exception as e:
                     print(f"Error actualizando historial: {e}", flush=True)
 
