@@ -988,10 +988,7 @@ def procesar_callback(cq):
                     lines.append("\n*Otros activos hoy*:")
                     lines.extend(activos_resumen)
 
-                _tg_call("sendMessage", {
-                    "chat_id": chat_id, "parse_mode": "Markdown",
-                    "text": "\n".join(lines)
-                })
+                editar_mensaje(chat_id, msg_id, "\n".join(lines))
         except Exception as e:
             print(f"Error procesando historial: {e}", flush=True)
             editar_mensaje(chat_id, msg_id, "Error al procesar el historial.")
