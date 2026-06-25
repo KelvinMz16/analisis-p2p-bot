@@ -895,7 +895,7 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-threading.Thread(target=lambda: HTTPServer(("0.0.0.0", 7860), HealthHandler).serve_forever(), daemon=True).start()
+threading.Thread(target=lambda: HTTPServer(("0.0.0.0", 8080), HealthHandler).serve_forever(), daemon=True).start()
 # ============================================================
 
 
