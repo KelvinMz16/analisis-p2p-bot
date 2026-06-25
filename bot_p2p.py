@@ -283,6 +283,7 @@ def _construir_teclado():
         [{"text": "\U0001F4B0 Precio", "callback_data": "precio"},
          {"text": "\U0001F500 Combo", "callback_data": "combo"},
          {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
+        [{"text": "🌌 SOL DEX Arbitraje", "callback_data": "sol_dex_arbitraje"}],
         [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']:.0f})", "callback_data": "capital"},
          {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
         [{"text": f"\U0001F6D2 Filtro: {nombre_filtro()}", "callback_data": "ciclo_filtro"},
@@ -291,6 +292,7 @@ def _construir_teclado():
          {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"}],
         [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
+
 
 
 def enviar_menu(chat_id=None, texto=None):
@@ -352,6 +354,39 @@ def obtener_precio_p2p(trade_type, asset="USDT", trans_amount=0):
     except Exception as e:
         print(f"[{asset}/{trade_type}] Error: {e}", flush=True)
         return None
+
+
+def obtener_precio_dex_solana():
+    """Obtiene el precio promedio de SOL/USDC y SOL/USDT en Solana DEX via DexScreener API."""
+    url = "https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        pairs = resp.json().get("pairs", [])
+        prices = []
+        for p in pairs:
+            if p.get("chainId") == "solana" and p.get("quoteToken", {}).get("symbol") in ["USDC", "USDT"]:
+                price_str = p.get("priceUsd")
+                if price_str:
+                    prices.append(float(price_str))
+        if prices:
+            return sum(prices) / len(prices)
+    except Exception as e:
+        print(f"[DEX/SOL] Error: {e}", flush=True)
+    return None
+
+
+def obtener_precio_spot_solana():
+    """Obtiene el precio de SOL/USDT spot en Binance."""
+    url = "https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        return float(resp.json().get("price", 0))
+    except Exception as e:
+        print(f"[Binance/SOL] Error: {e}", flush=True)
+    return None
+
 
 
 def calcular_margen(asset, trans_amount=None):
@@ -909,7 +944,57 @@ def procesar_callback(cq):
             lines.append(f"\n\u23F3 Sin oportunidades ahora")
         editar_mensaje(chat_id, msg_id, "\n".join(lines))
 
+    elif data == "sol_dex_arbitraje":
+        try:
+            spot = obtener_precio_spot_solana()
+            dex = obtener_precio_dex_solana()
+            if spot and dex:
+                diff = dex - spot
+                pct = (diff / spot) * 100
+                
+                # Estimación de costos fijos de un ciclo (valores de referencia)
+                costo_retiro = 0.0005 * spot  # ~ 0.03 USD
+                costo_swap_y_slippage = 0.002 * CONFIG["capital"] # ~ 0.20% del capital
+                costos_totales = costo_retiro + costo_swap_y_slippage
+                
+                ganancia_bruta = (CONFIG["capital"] / spot) * dex - CONFIG["capital"]
+                ganancia_neta = ganancia_bruta - costos_totales
+                pct_neto = (ganancia_neta / CONFIG["capital"]) * 100 if CONFIG["capital"] > 0 else 0
+                
+                estado_arbi = "🟢 OPORTUNIDAD DETECTADA" if ganancia_neta > 0 else "🔴 NO RENTABLE AHORA"
+                
+                msg = (
+                    f"🌌 *Arbitraje SOL/USDT (Binance ➔ Solana DEX)*\n\n"
+                    f"🔹 *Precio Spot (Binance):* {spot:.4f} USDT\n"
+                    f"🔸 *Precio Promedio DEX:* {dex:.4f} USDT\n"
+                    f"📊 *Diferencia Bruta:* {diff:+.4f} USDT ({pct:+.2f}%)\n\n"
+                    f"💸 *Estimación con tu capital (${CONFIG['capital']:.0f}):*\n"
+                    f"- Ganancia Bruta: ${ganancia_bruta:.4f} USDT\n"
+                    f"- Costos estimados (Retiro + Slippage): ${costos_totales:.4f} USDT\n"
+                    f"- *Ganancia Neta:* *${ganancia_neta:.4f} USDT* ({pct_neto:+.2f}%)\n\n"
+                    f"📌 *Estado:* {estado_arbi}\n\n"
+                    f"_Nota: El arbitraje DEX requiere transferir SOL a tu wallet Phantom, hacer swap a USDT en Jupiter/Orca y retornar el USDT a Binance._"
+                )
+            else:
+                msg = "⚠️ No se pudieron obtener los precios de Solana (Spot o DEX) en este momento. Intenta de nuevo."
+            
+            kb = json.dumps({
+                "inline_keyboard": [
+                    [{"text": "🏠 Inicio", "callback_data": "menu"},
+                     {"text": "🔄 Actualizar", "callback_data": "sol_dex_arbitraje"}]
+                ]
+            })
+            _tg_call("editMessageText", {
+                "chat_id": chat_id, "message_id": msg_id,
+                "text": msg, "parse_mode": "Markdown",
+                "reply_markup": kb
+            }, ignore_400=True)
+        except Exception as e:
+            print(f"Error en callback sol_dex_arbitraje: {e}", flush=True)
+            editar_mensaje(chat_id, msg_id, "Error al calcular arbitraje SOL DEX.")
+
     elif data == "menu":
+
         editar_mensaje(chat_id, msg_id,
             f"\U0001F916 *Bot P2P Venezuela*\n"
             f"Capital: ${CONFIG['capital']:.0f} | Umbral: {CONFIG['margen_objetivo']}%\n"
