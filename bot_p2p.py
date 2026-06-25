@@ -218,6 +218,7 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
 def _construir_teclado():
     return [
         [{"text": "\U0001F4B0 Precio", "callback_data": "precio"},
+         {"text": "\U0001F500 Combo", "callback_data": "combo"},
          {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
         [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']:.0f})", "callback_data": "capital"},
          {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
@@ -473,6 +474,33 @@ def procesar_callback(cq):
             "reply_markup": json.dumps(kb)
         }, ignore_400=True)
 
+    elif data == "combo":
+        r = calcular_margen_usdt_usdc()
+        if r:
+            rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+            kb = json.dumps({
+                "inline_keyboard": [
+                    [{"text": "🏠 Inicio", "callback_data": "menu"},
+                     {"text": "🔄 Actualizar", "callback_data": "combo"}]
+                ]
+            })
+            _tg_call("editMessageText", {
+                "chat_id": chat_id, "message_id": msg_id,
+                "text": (
+                    f"\U0001F500 *Combo USDT \u2794 USDC / VES* ({r['filtro']})\n"
+                    f"Compra Maker (USDT): {r['compra_usdt']:.2f} VES\n"
+                    f"Venta Maker (USDC):  {r['venta_usdc']:.2f} VES\n"
+                    f"Comisiones: -{COMISION_TOTAL*100:.2f}%\n"
+                    f"*Margen neto: {r['margen']:+.2f}%* {rentable}\n"
+                    f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                    f"📌 Compra USDT (Maker) y venta USDC (Maker)."
+                ),
+                "parse_mode": "Markdown",
+                "reply_markup": kb
+            }, ignore_400=True)
+        else:
+            editar_mensaje(chat_id, msg_id, "No se pudieron obtener precios del combo.")
+
     elif data.startswith("detalle_"):
         asset = data.split("_", 1)[1]
         
@@ -490,8 +518,9 @@ def procesar_callback(cq):
         estrella = " \U0001F3C6" if asset == best_asset else ""
         kb = json.dumps({
             "inline_keyboard": [
-                [{"text": "\U0001F4CA Volver", "callback_data": "arbitraje"},
-                 {"text": "\U0001F504 Actualizar", "callback_data": f"detalle_{asset}"}]
+                [{"text": "🏠 Inicio", "callback_data": "menu"},
+                 {"text": "🔙 Volver", "callback_data": "arbitraje"}],
+                [{"text": "🔄 Actualizar", "callback_data": f"detalle_{asset}"}]
             ]
         })
         _tg_call("editMessageText", {
