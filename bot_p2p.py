@@ -438,13 +438,15 @@ COINCAP_IDS = {
 }
 
 
+TIMEOUT_CORTO = 5  # segundos maximo por llamada externa
+
+
 def obtener_precio_coincap(network_key):
-    """Precio spot desde CoinCap.io (confiable, sin rate limits)."""
     cid = COINCAP_IDS.get(network_key)
     if not cid:
         return None
     try:
-        resp = requests.get(f"https://api.coincap.io/v2/assets/{cid}", headers=HEADERS, timeout=10)
+        resp = requests.get(f"https://api.coincap.io/v2/assets/{cid}", headers=HEADERS, timeout=TIMEOUT_CORTO)
         resp.raise_for_status()
         price = float(resp.json()["data"]["priceUsd"])
         if price > 0:
@@ -455,14 +457,13 @@ def obtener_precio_coincap(network_key):
 
 
 def obtener_precio_coingecko(network_key):
-    """Precio spot desde CoinGecko (fallback, puede dar 429)."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
     try:
         resp = requests.get(
             f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd",
-            headers=HEADERS, timeout=10
+            headers=HEADERS, timeout=TIMEOUT_CORTO
         )
         resp.raise_for_status()
         price = float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
@@ -474,11 +475,10 @@ def obtener_precio_coingecko(network_key):
 
 
 def obtener_precio_binance_ask_proxy(symbol):
-    """Binance ASK via Cloudflare Worker proxy (evita bloqueo 451)."""
     proxy = CLOUDFLARE_PROXY.rstrip("/")
     url = f"{proxy}/binance-api/api/v3/depth?symbol={symbol}&limit=1"
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT_CORTO)
         resp.raise_for_status()
         asks = resp.json().get("asks", [])
         if asks:
@@ -489,41 +489,36 @@ def obtener_precio_binance_ask_proxy(symbol):
 
 
 def obtener_precio_spot(network_key):
-    """Precio spot: Binance ASK via Cloudflare proxy -> CoinCap.io -> CoinGecko.
-    NUNCA DexScreener para mantener fuentes separadas."""
+    """Binance proxy -> CoinCap -> CoinGecko. NUNCA DexScreener."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
-    # Binance ASK via Cloudflare proxy (evita 451)
-    binance_symbol = cfg.get("binance_symbol")
-    if binance_symbol:
-        price = obtener_precio_binance_ask_proxy(binance_symbol)
-        if price:
-            print(f"  [Spot/{network_key}] Binance proxy ASK: ${price:.4f}", flush=True)
-            return price
-    # Fallback CoinCap
-    price = obtener_precio_coincap(network_key)
-    if price:
-        print(f"  [Spot/{network_key}] CoinCap: ${price:.4f}", flush=True)
-        return price
-    # Fallback CoinGecko
-    price = obtener_precio_coingecko(network_key)
-    if price:
-        print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
-        return price
+    sym = cfg.get("binance_symbol")
+    if sym:
+        p = obtener_precio_binance_ask_proxy(sym)
+        if p:
+            print(f"  [Spot/{network_key}] Binance proxy ASK: ${p:.4f}", flush=True)
+            return p
+    p = obtener_precio_coincap(network_key)
+    if p:
+        print(f"  [Spot/{network_key}] CoinCap: ${p:.4f}", flush=True)
+        return p
+    p = obtener_precio_coingecko(network_key)
+    if p:
+        print(f"  [Spot/{network_key}] CoinGecko: ${p:.4f}", flush=True)
+        return p
     print(f"  [Spot/{network_key}] Sin precio disponible", flush=True)
     return None
 
 
 def obtener_precio_jupiter_proxy():
-    """Swap SOL -> USDC via Jupiter API a traves de Cloudflare proxy (evita DNS fail)."""
     proxy = CLOUDFLARE_PROXY.rstrip("/")
     url = (f"{proxy}/jupiter-api/v6/quote"
            f"?inputMint=So11111111111111111111111111111111111111112"
            f"&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
            f"&amount=1000000000&slippageBps=50")
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT_CORTO)
         resp.raise_for_status()
         out_amount = int(resp.json().get("outAmount", 0))
         if out_amount > 0:
@@ -534,15 +529,15 @@ def obtener_precio_jupiter_proxy():
 
 
 def obtener_precio_dex(network_key):
-    """Precio DEX. SOL via Jupiter proxy (Phantom), POL/BNB via DexScreener."""
+    """SOL via Jupiter proxy. POL/BNB via DexScreener."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
     if network_key == "SOL":
-        price = obtener_precio_jupiter_proxy()
-        if price:
-            print(f"  [DEX/SOL] Jupiter proxy: ${price:.4f}", flush=True)
-            return price
+        p = obtener_precio_jupiter_proxy()
+        if p:
+            print(f"  [DEX/SOL] Jupiter proxy: ${p:.4f}", flush=True)
+            return p
     url = f"https://api.dexscreener.com/latest/dex/tokens/{cfg['token_address']}"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
@@ -1161,42 +1156,29 @@ def procesar_callback(cq):
 
     elif data == "dex_multired":
         try:
-            resultados = []
+            msg = f"🌌 *Arbitraje DEX Multi-Red* (Capital: ${CONFIG['capital']:.0f})\n\n"
+            fallos = []
             for nk in DEX_NETWORKS:
                 r = calcular_arbitraje_dex(nk)
                 if r:
-                    resultados.append(r)
-                time.sleep(0.3)
-
-            if resultados:
-                resultados.sort(key=lambda x: x["pct_neto"], reverse=True)
-                mejor = resultados[0]
-
-                msg = f"🌌 *Arbitraje DEX Multi-Red* (Capital: ${CONFIG['capital']:.0f})\n\n"
-
-                for r in resultados:
                     icono = "🟢" if r["ganancia_neta"] > 0 else "🔴"
-                    estrella = " 🏆" if r == mejor else ""
                     msg += (
-                        f"{icono} *{r['network']}* ({r['nombre']}){estrella}\n"
+                        f"{icono} *{r['network']}* ({r['nombre']})\n"
                         f"   Spot: ${r['spot']:.4f} | DEX: ${r['dex']:.4f}\n"
                         f"   Spread: {r['pct_bruto']:+.2f}% | Costos: ${r['costos']:.3f}\n"
                         f"   *Neto: ${r['ganancia_neta']:.4f}* ({r['pct_neto']:+.2f}%)\n"
                         f"   Wallet: {r['wallet']} | DEX: {r['dex_principales']}\n\n"
                     )
-
-                if mejor["ganancia_neta"] > 0:
-                    msg += (
-                        f"🏆 *Mejor opción: {mejor['network']} ({mejor['nombre']})*\n"
-                        f"Ganancia neta estimada: *${mejor['ganancia_neta']:.4f} USDT*\n"
-                        f"Usa {mejor['wallet']} ➔ Operar ➔ Swap en {mejor['dex_principales']}\n"
-                    )
                 else:
-                    msg += "⏳ Ninguna red es rentable en este momento. El bot seguirá monitoreando.\n"
+                    fallos.append(nk)
+                time.sleep(0.3)
 
-                msg += "\n_Tip: Usa el botón Operar de Phantom para hacer swap._"
+            if fallos:
+                msg += f"⚠️ Sin datos: {', '.join(fallos)}\n"
+            if not msg.strip(" *\n"):
+                msg = "⚠️ No se pudieron obtener precios de ninguna red."
             else:
-                msg = "⚠️ No se pudieron obtener precios de ninguna red. Intenta de nuevo."
+                msg += "\n_Tip: Usa el botón Operar de Phantom para hacer swap._"
 
             kb = json.dumps({
                 "inline_keyboard": [
