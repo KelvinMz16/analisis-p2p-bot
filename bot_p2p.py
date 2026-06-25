@@ -21,6 +21,18 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "historical_prices")
 
+if SUPABASE_KEY:
+    # Clean any whitespace or quotes that might have been pasted
+    SUPABASE_KEY = SUPABASE_KEY.strip().strip('"').strip("'")
+    print(f"[DEBUG] SUPABASE_KEY length: {len(SUPABASE_KEY)}, starts with: {SUPABASE_KEY[:6]}..., ends with: ...{SUPABASE_KEY[-6:]}", flush=True)
+else:
+    print("[DEBUG] SUPABASE_KEY is None or empty", flush=True)
+
+if SUPABASE_URL:
+    SUPABASE_URL = SUPABASE_URL.strip().strip('"').strip("'")
+    print(f"[DEBUG] SUPABASE_URL: {SUPABASE_URL}", flush=True)
+
+
 def supabase_upsert(record):
     """Insert a record into the Supabase table.
     The function uses the REST API with the provided URL and API key.
