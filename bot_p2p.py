@@ -433,8 +433,8 @@ def obtener_precio_jupiter_sol():
 
 def obtener_precio_dex(network_key):
     """Obtiene precio de venta del token en DEX.
-    Para SOL usa Jupiter API (precio real de swap en Phantom).
-    Para otros usa DexScreener promedio."""
+    Para SOL usa Jupiter API (swap real en Phantom).
+    Para POL/BNB usa DexScreener par con mayor liquidez."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
@@ -447,14 +447,18 @@ def obtener_precio_dex(network_key):
         resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
         pairs = resp.json().get("pairs", [])
-        prices = []
+        best_price = None
+        best_liq = 0
         for p in pairs:
             if p.get("chainId") == cfg["chain_id"] and p.get("quoteToken", {}).get("symbol") in ["USDC", "USDT"]:
+                liq_raw = p.get("liquidity", {})
+                liq = float(liq_raw.get("usd", 0)) if isinstance(liq_raw, dict) else 0
                 price_str = p.get("priceUsd")
-                if price_str:
-                    prices.append(float(price_str))
-        if prices:
-            return sum(prices) / len(prices)
+                if price_str and liq > best_liq:
+                    best_price = float(price_str)
+                    best_liq = liq
+        if best_price:
+            return best_price
     except Exception as e:
         print(f"[DEX/{network_key}] Error: {e}", flush=True)
     return None
