@@ -412,132 +412,32 @@ DEX_NETWORKS = {
 }
 
 
-def obtener_precio_jupiter_sol():
-    """Swap SOL -> USDC en Jupiter (lo que Phantom usa internamente).
-    Retorna cuantos USD recibes por 1 SOL vendido en Jupiter."""
-    try:
-        amount = 1_000_000_000  # 1 SOL en lamports
-        url = ("https://quote-api.jup.ag/v6/quote"
-               f"?inputMint=So11111111111111111111111111111111111111112"
-               f"&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-               f"&amount={amount}&slippageBps=50")
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        out_amount = int(resp.json().get("outAmount", 0))
-        if out_amount > 0:
-            return out_amount / 1_000_000  # USDC tiene 6 decimales
-    except Exception as e:
-        print(f"[Jupiter/SOL] Error: {e}", flush=True)
-    return None
-
-
-COINCAP_IDS = {
-    "SOL": "solana",
-    "POL": "polygon",
-    "BNB": "binance-coin",
-}
-
-
-TIMEOUT_CORTO = 5  # segundos maximo por llamada externa
-
-
-def obtener_precio_coincap(network_key):
-    cid = COINCAP_IDS.get(network_key)
-    if not cid:
-        return None
-    try:
-        resp = requests.get(f"https://api.coincap.io/v2/assets/{cid}", headers=HEADERS, timeout=TIMEOUT_CORTO)
-        resp.raise_for_status()
-        price = float(resp.json()["data"]["priceUsd"])
-        if price > 0:
-            return price
-    except Exception as e:
-        print(f"[CoinCap/{network_key}] Error: {e}", flush=True)
-    return None
-
-
-def obtener_precio_coingecko(network_key):
+def obtener_precio_spot(network_key):
+    """Precio spot vía CoinGecko (única fuente que funciona desde HF)."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
     try:
         resp = requests.get(
             f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd",
-            headers=HEADERS, timeout=TIMEOUT_CORTO
+            headers=HEADERS, timeout=5
         )
         resp.raise_for_status()
         price = float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
         if price > 0:
+            print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
             return price
     except Exception as e:
         print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
-    return None
-
-
-def obtener_precio_binance_ask_proxy(symbol):
-    proxy = CLOUDFLARE_PROXY.rstrip("/")
-    url = f"{proxy}/binance-api/api/v3/depth?symbol={symbol}&limit=1"
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT_CORTO)
-        resp.raise_for_status()
-        asks = resp.json().get("asks", [])
-        if asks:
-            return float(asks[0][0])
-    except Exception as e:
-        print(f"[BinanceProxy/{symbol}] Error: {e}", flush=True)
-    return None
-
-
-def obtener_precio_spot(network_key):
-    """Binance proxy -> CoinCap -> CoinGecko. NUNCA DexScreener."""
-    cfg = DEX_NETWORKS.get(network_key)
-    if not cfg:
-        return None
-    sym = cfg.get("binance_symbol")
-    if sym:
-        p = obtener_precio_binance_ask_proxy(sym)
-        if p:
-            print(f"  [Spot/{network_key}] Binance proxy ASK: ${p:.4f}", flush=True)
-            return p
-    p = obtener_precio_coincap(network_key)
-    if p:
-        print(f"  [Spot/{network_key}] CoinCap: ${p:.4f}", flush=True)
-        return p
-    p = obtener_precio_coingecko(network_key)
-    if p:
-        print(f"  [Spot/{network_key}] CoinGecko: ${p:.4f}", flush=True)
-        return p
     print(f"  [Spot/{network_key}] Sin precio disponible", flush=True)
     return None
 
 
-def obtener_precio_jupiter_proxy():
-    proxy = CLOUDFLARE_PROXY.rstrip("/")
-    url = (f"{proxy}/jupiter-api/v6/quote"
-           f"?inputMint=So11111111111111111111111111111111111111112"
-           f"&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-           f"&amount=1000000000&slippageBps=50")
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT_CORTO)
-        resp.raise_for_status()
-        out_amount = int(resp.json().get("outAmount", 0))
-        if out_amount > 0:
-            return out_amount / 1_000_000
-    except Exception as e:
-        print(f"[JupiterProxy/SOL] Error: {e}", flush=True)
-    return None
-
-
 def obtener_precio_dex(network_key):
-    """SOL via Jupiter proxy. POL/BNB via DexScreener."""
+    """Precio DEX vía DexScreener (única fuente DEX que funciona desde HF)."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
-    if network_key == "SOL":
-        p = obtener_precio_jupiter_proxy()
-        if p:
-            print(f"  [DEX/SOL] Jupiter proxy: ${p:.4f}", flush=True)
-            return p
     url = f"https://api.dexscreener.com/latest/dex/tokens/{cfg['token_address']}"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
