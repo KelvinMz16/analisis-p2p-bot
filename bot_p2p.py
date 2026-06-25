@@ -412,8 +412,28 @@ DEX_NETWORKS = {
 _COINGECKO_CACHE = {"data": None, "ts": 0}
 
 
+_COINGECKO_CACHE = {"data": None, "ts": 0}
+
+
+def _fetch_spot_single(network_key):
+    """Fallback individual si el batch falla."""
+    cfg = DEX_NETWORKS.get(network_key)
+    if not cfg or not cfg.get("coingecko_id"):
+        return None
+    try:
+        resp = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd",
+            headers=HEADERS, timeout=5
+        )
+        resp.raise_for_status()
+        return float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
+    except Exception as e:
+        print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
+    return None
+
+
 def _fetch_all_spot_prices():
-    """Una sola llamada a CoinGecko para todos los assets, cacheado 10s."""
+    """Batch todos los assets en una llamada, cacheado 10s."""
     ahora = time.time()
     if _COINGECKO_CACHE["data"] and (ahora - _COINGECKO_CACHE["ts"]) < 10:
         return _COINGECKO_CACHE["data"]
@@ -441,6 +461,11 @@ def obtener_precio_spot(network_key):
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
         print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
+        return price
+    # Fallback individual si batch no tenia el precio (429 parcial)
+    time.sleep(0.5)
+    price = _fetch_spot_single(network_key)
+    if price and price > 0:
         return price
     print(f"  [Spot/{network_key}] Sin precio disponible", flush=True)
     return None
