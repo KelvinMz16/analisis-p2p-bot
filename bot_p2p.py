@@ -377,15 +377,21 @@ def obtener_precio_dex_solana():
 
 
 def obtener_precio_spot_solana():
-    """Obtiene el precio de SOL en CoinGecko (que no bloquea la IP de HF y es en vivo)."""
+    """Obtiene el precio de SOL en CoinGecko (con fallback a DexScreener si da 429)."""
     url = "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
-        return float(resp.json().get("solana", {}).get("usd", 0))
+        price = float(resp.json().get("solana", {}).get("usd", 0))
+        if price > 0:
+            return price
     except Exception as e:
-        print(f"[CoinGecko/SOL] Error: {e}", flush=True)
-    return None
+        print(f"[CoinGecko/SOL] Error (usando fallback): {e}", flush=True)
+    
+    # Fallback: Si CoinGecko da rate limit (429), usamos el precio de DexScreener que ya funciona
+    print("[CoinGecko/SOL] Usando precio de DEX como referencia para Spot", flush=True)
+    return obtener_precio_dex_solana()
+
 
 
 
