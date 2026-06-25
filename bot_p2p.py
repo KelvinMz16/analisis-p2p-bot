@@ -381,6 +381,7 @@ DEX_NETWORKS = {
         "chain_id": "solana",
         "token_address": "So11111111111111111111111111111111111111112",
         "coingecko_id": "solana",
+        "binance_symbol": "SOLUSDT",
         "costo_retiro_usd": 0.03,
         "swap_fee_pct": 0.002,
         "wallet": "Phantom (Solana)",
@@ -391,6 +392,7 @@ DEX_NETWORKS = {
         "chain_id": "polygon",
         "token_address": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
         "coingecko_id": "polygon-ecosystem-token",
+        "binance_symbol": "POLUSDT",
         "costo_retiro_usd": 0.01,
         "swap_fee_pct": 0.003,
         "wallet": "Phantom (Polygon)",
@@ -401,6 +403,7 @@ DEX_NETWORKS = {
         "chain_id": "bsc",
         "token_address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
         "coingecko_id": "binancecoin",
+        "binance_symbol": "BNBUSDT",
         "costo_retiro_usd": 0.28,
         "swap_fee_pct": 0.002,
         "wallet": "Phantom (BSC)",
@@ -470,13 +473,40 @@ def obtener_precio_coingecko(network_key):
     return None
 
 
+def obtener_precio_binance_ask_proxy(symbol):
+    """Binance ASK via Cloudflare Worker proxy (evita bloqueo 451)."""
+    proxy = CLOUDFLARE_PROXY.rstrip("/")
+    url = f"{proxy}/binance-api/api/v3/depth?symbol={symbol}&limit=1"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        asks = resp.json().get("asks", [])
+        if asks:
+            return float(asks[0][0])
+    except Exception as e:
+        print(f"[BinanceProxy/{symbol}] Error: {e}", flush=True)
+    return None
+
+
 def obtener_precio_spot(network_key):
-    """Precio spot desde CoinCap.io (primario) o CoinGecko (fallback).
+    """Precio spot: Binance ASK via Cloudflare proxy -> CoinCap.io -> CoinGecko.
     NUNCA DexScreener para mantener fuentes separadas."""
+    cfg = DEX_NETWORKS.get(network_key)
+    if not cfg:
+        return None
+    # Binance ASK via Cloudflare proxy (evita 451)
+    binance_symbol = cfg.get("binance_symbol")
+    if binance_symbol:
+        price = obtener_precio_binance_ask_proxy(binance_symbol)
+        if price:
+            print(f"  [Spot/{network_key}] Binance proxy ASK: ${price:.4f}", flush=True)
+            return price
+    # Fallback CoinCap
     price = obtener_precio_coincap(network_key)
     if price:
         print(f"  [Spot/{network_key}] CoinCap: ${price:.4f}", flush=True)
         return price
+    # Fallback CoinGecko
     price = obtener_precio_coingecko(network_key)
     if price:
         print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
@@ -485,12 +515,34 @@ def obtener_precio_spot(network_key):
     return None
 
 
+def obtener_precio_jupiter_proxy():
+    """Swap SOL -> USDC via Jupiter API a traves de Cloudflare proxy (evita DNS fail)."""
+    proxy = CLOUDFLARE_PROXY.rstrip("/")
+    url = (f"{proxy}/jupiter-api/v6/quote"
+           f"?inputMint=So11111111111111111111111111111111111111112"
+           f"&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+           f"&amount=1000000000&slippageBps=50")
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        out_amount = int(resp.json().get("outAmount", 0))
+        if out_amount > 0:
+            return out_amount / 1_000_000
+    except Exception as e:
+        print(f"[JupiterProxy/SOL] Error: {e}", flush=True)
+    return None
+
+
 def obtener_precio_dex(network_key):
-    """Precio DEX desde DexScreener (par con mayor liquidez).
-    NUNCA CoinCap/CoinGecko para mantener fuentes separadas."""
+    """Precio DEX. SOL via Jupiter proxy (Phantom), POL/BNB via DexScreener."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
+    if network_key == "SOL":
+        price = obtener_precio_jupiter_proxy()
+        if price:
+            print(f"  [DEX/SOL] Jupiter proxy: ${price:.4f}", flush=True)
+            return price
     url = f"https://api.dexscreener.com/latest/dex/tokens/{cfg['token_address']}"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)

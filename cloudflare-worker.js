@@ -32,5 +32,49 @@ async function handleRequest(request) {
     }
   }
 
+  // Proxy for Binance API (bypasses HF IP block / 451)
+  if (url.pathname.startsWith("/binance-api/")) {
+    const restPath = url.pathname.replace("/binance-api/", "");
+    const query = url.search;
+    const targetUrl = `https://api.binance.com/${restPath}${query}`;
+    try {
+      const resp = await fetch(targetUrl, {
+        method: request.method,
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+      return new Response(await resp.text(), {
+        status: resp.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+
+  // Proxy for Jupiter API (HF DNS no resuelve quote-api.jup.ag)
+  if (url.pathname.startsWith("/jupiter-api/")) {
+    const restPath = url.pathname.replace("/jupiter-api/", "");
+    const query = url.search;
+    const targetUrl = `https://quote-api.jup.ag/${restPath}${query}`;
+    try {
+      const resp = await fetch(targetUrl, {
+        method: request.method,
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+      return new Response(await resp.text(), {
+        status: resp.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+
   return new Response("Not found", { status: 404 });
 }
