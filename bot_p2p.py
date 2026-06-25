@@ -47,7 +47,11 @@ def supabase_upsert(record):
         "Prefer": "return=representation",
     }
     resp = requests.post(url, json=record, headers=headers)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[DEBUG] Supabase POST failed. Response: {resp.text}", flush=True)
+        raise e
     return resp.json()
 
 def supabase_select_all():
@@ -62,8 +66,13 @@ def supabase_select_all():
         "Authorization": f"Bearer {SUPABASE_KEY}",
     }
     resp = requests.get(url, headers=headers)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[DEBUG] Supabase GET failed. Response: {resp.text}", flush=True)
+        raise e
     return resp.json()
+
 
 CONFIG_PATH = "config_usuario.json"
 
