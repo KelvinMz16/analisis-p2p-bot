@@ -30,50 +30,72 @@ Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras cripto
 | `USE_PROXY` | `true` |
 | `CAPITAL` | `90` (persistido desde el bot) |
 | `UMBRAL` | `0.8` (persistido desde el bot) |
+| `MONTO_FILTRO` | Filtro de monto (persistido desde el bot) |
+| `DEFAULT_CRYPTO` | Cripto predeterminada (persistido desde el bot) |
 | `HF_TOKEN` | Token de Hugging Face para guardar secrets |
+
+## Guardado de configuración (HF Secrets)
+- `guardar_config_local()` guarda en `config_usuario.json` (local, se pierde al redeploy)
+- Y sincroniza a HF Secrets: `CAPITAL`, `UMBRAL`, `MONTO_FILTRO`, `DEFAULT_CRYPTO`
+- `_sync_hf_secret(key, value)` → `POST https://huggingface.co/api/spaces/{NAMESPACE}/secrets`
+- Al iniciar: lee de `config_usuario.json` primero, con fallback a env vars (`os.getenv`)
+- Startup llama a `guardar_config_local()` para asegurar que secrets existan
 
 ## Cloudflare Worker
 - **Archivo:** `cloudflare-worker.js`
 - **Formato:** `addEventListener('fetch', ...)` (service worker)
 - **Ruta:** `/telegram-api/{method}` → reenvía a `https://api.telegram.org/bot{BOT_TOKEN}/{method}`
+- **Rutas adicionales:** `/binance-api/` y `/jupiter-api/` (NO FUNCIONAN actualmente — timeouts desde HF)
 - **`BOT_TOKEN` debe estar configurado como variable de entorno en el dashboard de Cloudflare Workers**
 - URL: `https://ves-arbitraje-p2p.kelvinyohan14.workers.dev`
 
 ## Binance P2P API
 - **Endpoint:** `POST https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search`
-- **Payload sin `payTypes`** (la API no reconoce nombres textuales de métodos de pago)
-- **Promedio:** índices 2,3,4 (3er a 5to anuncio), requiere mínimo 5 anuncios
+- **Payload con `payTypes`** `["BancoDeVenezuela", "PagoMovil"]`
+- **Promedio:** índices 0-2 (1er al 3er anuncio), requiere mínimo 3 anuncios
 - **Assets monitoreados:** `["USDT", "BTC", "ETH", "BNB", "USDC", "SOL"]` (solo los que tienen 5+ ads en ambos lados en VES)
 
 ## Cálculos
-- **Margen neto:** `((venta - compra) - (venta*0.0025) - (compra*0.0025)) / compra * 100`
-- **Comisión:** 0.25% por lado (0.5% total)
+- **Margen neto:** `((venta - compra) - (compra*0.0025) - (venta*0.0025) - (compra*0.003)) / compra * 100`
+- **Comisiones:** 0.25% Maker compra + 0.25% Maker venta + 0.30% Pago Móvil BDV = **0.80% total**
 - **Ganancia USD:** `capital * (margen / 100)`
 - **Ganancia VES:** `ganancia_usd * tasa_venta_USDT`
-- **Señal COMPRA:** asset con mayor descuento = `(venta - compra) / venta * 100`
-- **Señal VENTA:** asset con mayor prima = `(venta - compra) / compra * 100`
 - **Umbral:** 0.8% fijo por defecto, ajustable desde Telegram
+- **Capital mínimo:** $100 USD para anuncios Maker
+
+## Precios Spot y DEX (fuentes que funcionan desde HF Spaces)
+| API | Estado | Uso |
+|-----|--------|-----|
+| `api.coingecko.com` | ✅ Funciona | Spot price (batch todos assets + cache 10s) |
+| `api.dexscreener.com` | ✅ Funciona | DEX price (par con mayor liquidez) |
+| `p2p.binance.com` | ✅ Funciona | P2P anuncios VES |
+| `api.coincap.io` | ❌ DNS fail desde HF | Desactivado |
+| `api.binance.com` | ❌ HTTP 451 bloqueado | Desactivado (ni Cloudflare proxy ayuda) |
+| `quote-api.jup.ag` | ❌ DNS fail desde HF | Desactivado (ni Cloudflare proxy ayuda) |
 
 ## Estructura del bot
-- `bot_p2p.py` → Script principal (todo en un archivo)
+- `bot_p2p.py` → Script principal (~1480 líneas)
 - `cloudflare-worker.js` → Worker de Cloudflare
 - `Dockerfile` → `python:3.11-slim`, `PYTHONUNBUFFERED=1`, `CMD ["python", "-u", "bot_p2p.py"]`
 - `requirements.txt` → `requests>=2.31.0`
 - `README.md` → Frontmatter `sdk:docker` para HF Spaces
+- `guia-mercado-spot.md` → Guía de cómo comprar en Spot
 
 ## Funcionalidades
 - **Precio USDT**: Muestra compra/venta/margen/ganancia de USDT/VES
-- **Multi-cripto**: Lista todas las criptos con botones, mejor/peor margen, señales COMPRA/VENTA
-- **Detalle por cripto**: Click en cualquier cripto del multi-cripto → muestra detalle individual
+- **Multi-cripto**: Lista todas las criptos con botones, mejor/peor margen
+- **Detalle por cripto**: Click en cualquier cripto → detalle individual + guarda como predeterminada
 - **Capital**: Botón para cambiar capital (persiste vía HF Secrets)
 - **Umbral**: Botón para cambiar umbral de alerta (persiste vía HF Secrets)
 - **Estado**: Muestra capital, umbral, y márgenes de todas las criptos
-- **Monitoreo automático**: Cada 60s revisa todos los assets, alerta si alguno supera el umbral
+- **Monitoreo automático**: Cada 60s revisa todos los assets, alerta solo si USDT supera umbral
+- **Solo alertas USDT**: USDC ya no genera notificaciones (no rentable según análisis)
 - **Heartbeat**: Cada 30 ciclos (~30 min) envía el mejor margen del momento
-- **Alerta de recuperación**: Cuando un asset pasa de margen negativo a positivo
+- **Alerta de recuperación**: Cuando USDT pasa de margen negativo a positivo
+- **Auto-refresh de paneles**: Mensajes dinámicos (precio, multi-cripto, detalle, combo, estado, DEX) se actualizan cada 60s automáticamente. Expiran tras 5 ciclos (5 min).
 - **Modo silencioso**: Sin notificaciones entre 12 AM y 7 AM (hora Venezuela)
 - **Ganancia en VES**: Muestra ganancia en USD y Bs.
-- **Historial**: Guarda precios cada 60s en `historial_precios.jsonl`. Botón "📅 Historial" en el menú muestra min/max/promedio de USDT del período.
+- **Historial**: Guarda precios cada 60s en Supabase + JSONL. Botón "📅 Historial" lee de Supabase con fallback a JSONL.
 
 ## Horario de silencio
 - `VENEZUELA_TZ = timezone(timedelta(hours=-4))`
@@ -85,6 +107,14 @@ Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras cripto
 - Al cambiar a modo activo envía "Buenos días"
 - No hay mensaje de "Buenas noches" al dormir (silencio completo)
 
+## DEX Multi-Red
+- **Redes monitoreadas:** SOL (Solana), POL (Polygon), BNB (BNB Chain)
+- **Spot price:** CoinGecko (única fuente que funciona desde HF)
+- **DEX price:** DexScreener (par USDC/USDT con mayor liquidez, por chain)
+- **Cálculo:** Spread entre precio Spot y DEX, menos costos de retiro + swap
+- **Alertas automáticas:** Usa mismo umbral configurable (`margen_objetivo`)
+- **Alerta de recuperación DEX:** Cuando margen pasa de negativo a positivo
+
 ## Datos críticos
 - Rama: `main` (obligatorio para HF Spaces)
 - HF Space: `KelvinMz/VesArbitrajeP2P`
@@ -92,6 +122,8 @@ Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras cripto
 - No usar `python-telegram-bot` ni `httpx` (fallan en HF con `ConnectError`)
 - `getUpdates` usa POST con JSON (timeout=10)
 - Output unbuffered forzado (`PYTHONUNBUFFERED=1`, `python -u`)
+- **Redes desde HF:** CoinGecko funciona, DexScreener funciona, P2P Binance funciona. Binance API (451), CoinCap (DNS fail), Jupiter (DNS fail) NO funcionan.
+- **Supabase:** URL `wmedwtgfjjkmflfbftxs.supabase.co`, key almacenada como `SUPABASE_URL` y `SUPABASE_KEY`
 
 ## Investigación Kontigo + BPay (archivada)
 - Kontigo **no permite transferencia directa** a BPay — solo vía redes blockchain (USDT/USDC)
