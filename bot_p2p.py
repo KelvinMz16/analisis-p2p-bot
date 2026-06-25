@@ -138,6 +138,8 @@ ULTIMOS = {}
 ESTADOS_USUARIO = {}
 MARGE_ANTERIOR = {}  # asset -> ultimo margen, para detectar recuperacion
 ALERTA_ENVIADA = set()  # assets con alerta ya enviada en este ciclo positivo
+ALERTA_ENVIADA_DEX = set()  # redes DEX con alerta ya enviada
+MARGE_ANTERIOR_DEX = {}     # network_key -> ultimo margen neto DEX
 VPS_EXPIRY = date(2026, 7, 24)
 VPS_EXPIRY_NOTIFIED = False
 
@@ -1297,6 +1299,49 @@ def loop_monitoreo():
                     })
                 elif top and top["margen"] < CONFIG["margen_objetivo"]:
                     ALERTA_ENVIADA.discard(top["asset"])
+
+            # ============================================================
+            # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
+            # ============================================================
+            for nk in DEX_NETWORKS:
+                try:
+                    r = calcular_arbitraje_dex(nk)
+                    if not r:
+                        continue
+                    print(f"  DEX/{nk}: {r['pct_neto']:+.2f}% neto", flush=True)
+                    ant = MARGE_ANTERIOR_DEX.get(nk)
+                    MARGE_ANTERIOR_DEX[nk] = r["pct_neto"]
+                    if ant is not None and ant < 0 <= r["pct_neto"]:
+                        _tg_call("sendMessage", {
+                            "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                            "text": (
+                                f"\U0001F7E2 *RECUPERACION DEX* {r['network']} ({r['nombre']})\n"
+                                f"Margen pasó de {ant:+.2f}% a {r['pct_neto']:+.2f}%\n"
+                                f"Spot: ${r['spot']:.2f} | DEX: ${r['dex']:.2f}"
+                            )
+                        })
+                    if r["pct_neto"] >= CONFIG["margen_objetivo"] and r["ganancia_neta"] > 0 and nk not in ALERTA_ENVIADA_DEX:
+                        ALERTA_ENVIADA_DEX.add(nk)
+                        _tg_call("sendMessage", {
+                            "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                            "text": (
+                                f"\U0001F514 *ALERTA DEX MULTI-RED* ({r['network']})\n"
+                                f"Red: *{r['nombre']}* | Margen neto: *{r['pct_neto']:+.2f}%* \u2705 RENTABLE\n\n"
+                                f"\U0001F449 *Pasos:*\n"
+                                f"1\ufe0f\u20e3 Compra *{r['network']}* en Spot de Binance a *${r['spot']:.4f} USD*\n"
+                                f"2\ufe0f\u20e3 Retira a tu wallet *{r['wallet']}* (costo: ~${r['costo_retiro']:.2f})\n"
+                                f"3\ufe0f\u20e3 Vende en *{r['dex_principales']}* a *${r['dex']:.4f} USD*\n\n"
+                                f"\U0001F4C8 *Finanzas estimadas* (Capital: ${CONFIG['capital']:.0f}):\n"
+                                f"- Spread bruto: {r['pct_bruto']:+.2f}%\n"
+                                f"- Costos (retiro+swap): *${r['costos']:.2f}*\n"
+                                f"- *Ganancia Neta: ${r['ganancia_neta']:.4f} USD* ({r['pct_neto']:+.2f}%)\n"
+                                f"\n_Umbral actual: {CONFIG['margen_objetivo']}%_"
+                            )
+                        })
+                    elif r["pct_neto"] < CONFIG["margen_objetivo"]:
+                        ALERTA_ENVIADA_DEX.discard(nk)
+                except Exception as e:
+                    print(f"Error DEX/{nk}: {e}", flush=True)
 
             ciclo += 1
             if ciclo % 30 == 0 and mejores:
