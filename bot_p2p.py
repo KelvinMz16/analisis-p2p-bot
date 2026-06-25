@@ -971,7 +971,7 @@ def procesar_callback(cq):
                     f"Total registros: {total_hoy}\n",
                     "*Resumen USDT de Hoy*"
                 ]
-                usdt_margenes = [r["USDT"]["margen"] for r in lineas_hoy if "USDT" in r]
+                usdt_margenes = [r["USDT"]["margen"] for r in lineas_hoy if isinstance(r.get("USDT"), dict)]
                 if usdt_margenes:
                     lines.append(f"Min: {min(usdt_margenes):+.2f}%")
                     lines.append(f"Máx: {max(usdt_margenes):+.2f}%")
@@ -981,7 +981,7 @@ def procesar_callback(cq):
                 for asset in ASSETS_VES:
                     if asset == "USDT":
                         continue
-                    m_asset = [r[asset]["margen"] for r in lineas_hoy if asset in r]
+                    m_asset = [r[asset]["margen"] for r in lineas_hoy if isinstance(r.get(asset), dict)]
                     if m_asset:
                         activos_resumen.append(f"{asset}: Prom {sum(m_asset)/len(m_asset):+.2f}% (Máx {max(m_asset):+.2f}%)")
                 if activos_resumen:
