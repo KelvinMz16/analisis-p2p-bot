@@ -225,7 +225,8 @@ def _construir_teclado():
         [{"text": f"\U0001F6D2 Filtro: {nombre_filtro()}", "callback_data": "ciclo_filtro"},
          {"text": "\U0001F4CB Estado", "callback_data": "status"}],
         [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
-         {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+         {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"}],
+        [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
 
 
@@ -383,6 +384,105 @@ def analizar_opciones(trans_amount=None):
         resultados.append(combo)
     resultados.sort(key=lambda x: x["margen"], reverse=True)
     return resultados
+
+
+def analizar_historico_horarios():
+    if not os.path.exists(HISTORIAL_PATH):
+        return None
+    
+    # Agrupar datos por hora (0-23)
+    compras_por_hora = {i: [] for i in range(24)}
+    ventas_por_hora = {i: [] for i in range(24)}
+    
+    try:
+        with open(HISTORIAL_PATH, "r") as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    dt = datetime.fromisoformat(data["ts"])
+                    hour = dt.hour
+                    if "USDT" in data:
+                        compras_por_hora[hour].append(data["USDT"]["compra"])
+                        ventas_por_hora[hour].append(data["USDT"]["venta"])
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"Error analizando historial de horarios: {e}", flush=True)
+        return None
+
+    resumen = {}
+    for h in range(24):
+        c_list = compras_por_hora[h]
+        v_list = ventas_por_hora[h]
+        if c_list and v_list:
+            resumen[h] = {
+                "avg_compra": sum(c_list) / len(c_list),
+                "avg_venta": sum(v_list) / len(v_list),
+                "muestras": len(c_list)
+            }
+            
+    if not resumen:
+        return None
+        
+    return resumen
+
+
+def generar_reporte_horarios():
+    datos = analizar_historico_horarios()
+    if not datos:
+        return "⚠️ *No hay suficientes datos* históricos para realizar el análisis de horarios aún. Se necesitan al menos 24 horas de ejecución continua del bot."
+        
+    # Encontrar mejores horas individuales
+    mejor_maker_compra = min(datos.keys(), key=lambda h: datos[h]["avg_compra"])
+    mejor_maker_venta = max(datos.keys(), key=lambda h: datos[h]["avg_venta"])
+    
+    # Calcular promedios por bloques
+    bloques = {
+        "Mañana (6 AM - 12 PM)": list(range(6, 12)),
+        "Tarde (12 PM - 6 PM)": list(range(12, 18)),
+        "Noche (6 PM - 12 AM)": list(range(18, 24)),
+        "Madrugada (12 AM - 6 AM)": list(range(0, 6)),
+    }
+    
+    bloque_stats = {}
+    for nombre, horas in bloques.items():
+        c_vals = []
+        v_vals = []
+        for h in horas:
+            if h in datos:
+                c_vals.append(datos[h]["avg_compra"])
+                v_vals.append(datos[h]["avg_venta"])
+        if c_vals and v_vals:
+            bloque_stats[nombre] = {
+                "compra": sum(c_vals) / len(c_vals),
+                "venta": sum(v_vals) / len(v_vals)
+            }
+            
+    texto = (
+        f"📊 *ANÁLISIS DE HORARIOS (USDT)*\n"
+        f"Basado en los últimos 7 días de historial.\n\n"
+        f"🟢 *Mejor hora para COMPRAR (anuncio Maker):*\n"
+        f"   ➔ *{mejor_maker_compra:02d}:00 VET* (Promedio: {datos[mejor_maker_compra]['avg_compra']:.2f} VES)\n"
+        f"🔴 *Mejor hora para VENDER (anuncio Maker):*\n"
+        f"   ➔ *{mejor_maker_venta:02d}:00 VET* (Promedio: {datos[mejor_maker_venta]['avg_venta']:.2f} VES)\n\n"
+        f"📈 *Promedios por Bloques de Horas:*\n"
+    )
+    
+    for bloque, stats in bloque_stats.items():
+        spread_bruto = ((stats['venta'] - stats['compra']) / stats['compra']) * 100
+        texto += (
+            f"📍 *{bloque}*\n"
+            f"   • Compra Maker: {stats['compra']:.2f} VES\n"
+            f"   • Venta Maker:  {stats['venta']:.2f} VES\n"
+            f"   • Spread Promedio: {spread_bruto:+.2f}%\n"
+        )
+        
+    texto += (
+        f"\n💡 *Tip P2P:* En las mañanas suele haber menor volumen y precios de compra más económicos. "
+        f"En las noches suele aumentar la demanda, elevando los precios de venta."
+    )
+    return texto
+
 
 # ============================================================
 
@@ -670,6 +770,24 @@ def procesar_callback(cq):
         except Exception as e:
             print(f"Error procesando historial: {e}", flush=True)
             editar_mensaje(chat_id, msg_id, "Error al procesar el historial.")
+
+    elif data == "mejor_horario":
+        try:
+            reporte = generar_reporte_horarios()
+            kb = json.dumps({
+                "inline_keyboard": [
+                    [{"text": "🏠 Inicio", "callback_data": "menu"},
+                     {"text": "🔄 Actualizar", "callback_data": "mejor_horario"}]
+                ]
+            })
+            _tg_call("editMessageText", {
+                "chat_id": chat_id, "message_id": msg_id,
+                "text": reporte, "parse_mode": "Markdown",
+                "reply_markup": kb
+            }, ignore_400=True)
+        except Exception as e:
+            print(f"Error procesando mejor_horario: {e}", flush=True)
+            editar_mensaje(chat_id, msg_id, "Error al procesar el análisis de horarios.")
 
     elif data == "ciclo_filtro":
         idx_actual = FILTROS_MONTO.index(CONFIG["monto_filtro"]) if CONFIG["monto_filtro"] in FILTROS_MONTO else 0
