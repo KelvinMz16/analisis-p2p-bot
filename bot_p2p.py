@@ -33,6 +33,7 @@ CONFIG = {
     "capital": float(_config_local.get("capital", os.getenv("CAPITAL", "100"))),
     "margen_objetivo": float(_config_local.get("margen_objetivo", os.getenv("UMBRAL", "0.8"))),
     "monto_filtro": int(_config_local.get("monto_filtro", 0)),
+    "default_crypto": _config_local.get("default_crypto", "USDT"),
 }
 
 # Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
@@ -70,6 +71,10 @@ def guardar_umbral():
 COMISION = 0.0025          # 0.25% Binance Maker
 COMISION_BANCO = 0.003     # 0.30% Pago Movil BDV
 COMISION_TOTAL = COMISION * 2 + COMISION_BANCO  # 0.25% compra + 0.25% venta + 0.30% banco = 0.80%
+
+# Binance P2P requires a minimum advertisement amount of $100 USD for Maker ads
+MIN_AD_AMOUNT = 100  # USD
+
 ULTIMOS = {}
 ESTADOS_USUARIO = {}
 MARGE_ANTERIOR = {}  # asset -> ultimo margen, para detectar recuperacion
@@ -212,7 +217,7 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
 
 def _construir_teclado():
     return [
-        [{"text": "\U0001F4B0 Precio USDT", "callback_data": "precio"},
+        [{"text": "\U0001F4B0 Precio", "callback_data": "precio"},
          {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
         [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']:.0f})", "callback_data": "capital"},
          {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
@@ -272,11 +277,11 @@ def obtener_precio_p2p(trade_type, asset="USDT", trans_amount=0):
         resp = requests.post(URL_BINANCE, json=payload, headers=HEADERS, timeout=15)
         resp.raise_for_status()
         anuncios = resp.json().get("data", [])
-        if len(anuncios) < 3:
+        if len(anuncios) < 1:
             return None
-        # Promedio posiciones 3-5 si hay suficientes, sino promedia lo disponible
-        start = min(2, len(anuncios) - 1)
-        end = min(5, len(anuncios))
+        # Promedio posiciones 1-3 (índices 0 a 2) para obtener el precio competitivo real del mercado
+        start = 0
+        end = min(3, len(anuncios))
         precios = [float(anuncios[i]["adv"]["price"]) for i in range(start, end)]
         return sum(precios) / len(precios) if precios else None
     except Exception as e:
@@ -306,6 +311,49 @@ def calcular_margen(asset, trans_amount=None):
         "margen": margen, "ganancia_usd": ganancia_usd, "ganancia_ves": ganancia_ves,
         "filtro": nombre_filtro(monto)
     }
+# ============================================================
+# Función adicional: cálculo del combo USDT compra → USDC venta y análisis de opciones
+
+def calcular_margen_usdt_usdc(trans_amount=None):
+    """Calcular margen al comprar USDT y vender USDC.
+    Devuelve un dict con precios, margen y ganancias estimadas.
+    """
+    monto = trans_amount if trans_amount is not None else CONFIG["monto_filtro"]
+    # Precio para comprar USDT (taker) -> usamos tradeType "SELL" (makers compran USDT)
+    usdt_compra = obtener_precio_p2p("SELL", "USDT", monto)
+    # Precio para vender USDC (taker) -> usamos tradeType "BUY" (makers venden USDC)
+    usdc_venta = obtener_precio_p2p("BUY", "USDC", monto)
+    if usdt_compra is None or usdc_venta is None:
+        return None
+    # Ganancia neta en VES considerando comisiones
+    ganancia_neta = (usdc_venta - usdt_compra) - (usdt_compra * COMISION) - (usdc_venta * COMISION) - (usdt_compra * COMISION_BANCO)
+    margen = (ganancia_neta / usdt_compra) * 100
+    ganancia_usd = CONFIG["capital"] * (margen / 100)
+    tasa_ves = ULTIMOS.get("USDT", {}).get("venta")
+    ganancia_ves = (ganancia_usd * tasa_ves) if tasa_ves else None
+    return {
+        "asset": "USDT→USDC",
+        "compra_usdt": usdt_compra,
+        "venta_usdc": usdc_venta,
+        "margen": margen,
+        "ganancia_usd": ganancia_usd,
+        "ganancia_ves": ganancia_ves,
+        "filtro": nombre_filtro(monto)
+    }
+
+def analizar_opciones(trans_amount=None):
+    """Evalúa margen para USDT, USDC y la combinación USDT→USDC, y devuelve la lista ordenada."""
+    resultados = []
+    for asset in ["USDT", "USDC"]:
+        r = calcular_margen(asset, trans_amount)
+        if r:
+            resultados.append(r)
+    combo = calcular_margen_usdt_usdc(trans_amount)
+    if combo:
+        resultados.append(combo)
+    resultados.sort(key=lambda x: x["margen"], reverse=True)
+    return resultados
+
 # ============================================================
 
 
@@ -359,13 +407,14 @@ def procesar_callback(cq):
         return v
 
     if data == "precio":
-        r = calcular_margen("USDT")
+        asset = CONFIG.get("default_crypto", "USDT")
+        r = calcular_margen(asset)
         if r:
             desc = ((r['venta'] - r['compra']) / r['venta']) * 100
             pri = ((r['venta'] - r['compra']) / r['compra']) * 100
             rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
             editar_mensaje(chat_id, msg_id,
-                f"\U0001F4B0 *USDT / VES* ({r['filtro']})\n"
+                f"\U0001F4B0 *{asset} / VES* ({r['filtro']})\n"
                 f"Compra Maker: {r['compra']:.2f} VES\n"
                 f"Venta Maker:  {r['venta']:.2f} VES\n"
                 f"Spread bruto: {pri:.2f}%\n"
@@ -374,7 +423,7 @@ def procesar_callback(cq):
                 f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}"
             )
         else:
-            editar_mensaje(chat_id, msg_id, "No se pudieron obtener precios.")
+            editar_mensaje(chat_id, msg_id, f"No se pudieron obtener precios de {asset}.")
 
     elif data == "arbitraje":
         resultados = []
@@ -406,7 +455,7 @@ def procesar_callback(cq):
         texto += (
             f"\n\U0001F3C6 *Mejor:* {best['asset']} ({best['margen']:+.2f}%)\n"
             f"\u26A0 *Peor:* {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
-            f"Selecciona para detalle:\n"
+            f"Selecciona para detalle y predeterminar:\n"
         )
         kb = {"inline_keyboard": []}
         for r in resultados:
@@ -426,6 +475,11 @@ def procesar_callback(cq):
 
     elif data.startswith("detalle_"):
         asset = data.split("_", 1)[1]
+        
+        # Guardar como criptomoneda predeterminada
+        CONFIG["default_crypto"] = asset
+        guardar_config_local()
+
         r = calcular_margen(asset)
         if not r:
             editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
@@ -449,7 +503,8 @@ def procesar_callback(cq):
                 f"Spread bruto: {spread_bruto:.2f}%\n"
                 f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n"
                 f"*Margen neto: {r['margen']:+.2f}%* {rentable}\n"
-                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}"
+                f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+                f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
             ),
             "parse_mode": "Markdown", "reply_markup": kb
         })
@@ -766,7 +821,8 @@ def loop_monitoreo():
                         f"{comparativo_str}\n"
                         f"\u2139 *Detalle financiero de la alerta:*\n"
                         f"- Spread Bruto: {spread_bruto:.2f}%\n"
-                        f"- Comisiones Totales: -{COMISION_TOTAL*100:.2f}% (Binance Maker 0.50% + BDV 0.30%)"
+                        f"- Comisiones Totales: -{COMISION_TOTAL*100:.2f}% (Binance Maker 0.50% + BDV 0.30%)\n"
+                        f"{'' if CONFIG['capital'] >= MIN_AD_AMOUNT else '\n> ⚠️ *Advertencia:* Tu capital es inferior al mínimo requerido ($100) para crear anuncios Maker. Considera operar como *Taker* o aumentar tu capital antes de publicar anuncios.'}"
                     )
                     
                     _tg_call("sendMessage", {
@@ -787,6 +843,8 @@ def loop_monitoreo():
         time.sleep(60)
 
 
+
+
 if __name__ == "__main__":
     print("=" * 60, flush=True)
     print("  Bot P2P Binance - Venezuela", flush=True)
@@ -798,10 +856,9 @@ if __name__ == "__main__":
         time.sleep(2)
         extra = ""
         if not en_horario():
-            extra = "\n\U0001F634 Modo silencioso (12AM - 7AM)"
-        enviar_menu(texto=f"\U0001F4E1 *Bot P2P Iniciado*\nCapital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%{extra}")
-
-    try:
+            extra = " (modo silencioso)"
+        print(f"Iniciando monitor{extra}...", flush=True)
         loop_monitoreo()
-    except KeyboardInterrupt:
-        print("\nDetenido.", flush=True)
+    else:
+        print("Telegram token no configurado. Solo modo monitor", flush=True)
+        loop_monitoreo()
