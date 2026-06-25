@@ -1314,8 +1314,8 @@ def loop_monitoreo():
             if mejores:
                 mejores.sort(key=lambda x: x["margen"], reverse=True)
                 
-                # Para alertas de oportunidad, filtramos solo estables (USDT, USDC)
-                estables = [r for r in mejores if r["asset"] in ["USDT", "USDC"]]
+                # Solo alertas de USDT (USDC no es rentable según análisis)
+                estables = [r for r in mejores if r["asset"] == "USDT"]
                 top = estables[0] if estables else None
                 top_general = mejores[0]
                 
@@ -1324,7 +1324,7 @@ def loop_monitoreo():
                     ganancia_ves_top = f" | Bs.{top['ganancia_ves']:.2f}"
 
                 for r in mejores:
-                    if r["asset"] not in ["USDT", "USDC"]:
+                    if r["asset"] != "USDT":
                         continue
                     ant = MARGE_ANTERIOR.get(r["asset"])
                     MARGE_ANTERIOR[r["asset"]] = r["margen"]
