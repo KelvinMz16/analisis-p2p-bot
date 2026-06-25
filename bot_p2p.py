@@ -1324,41 +1324,15 @@ def scrape_subastasbcv():
         return None
 
 
-def loop_monitoreo():
-    global _ESTADO_SUENO, VPS_EXPIRY_NOTIFIED, _BCV_BDV_ACTIVO
-    print("  Monitoreo cada 60s...", flush=True)
-    ciclo = 0
+def _loop_bcv_scrape():
+    """Hilo separado: monitorea @subastasBCV cada 15s."""
+    global _BCV_BDV_ACTIVO
+    print("  Monitoreo BCV cada 15s...", flush=True)
     while True:
         try:
-            activo = en_horario()
-
-            # Notificar vencimiento VPS 5 dias antes
-            if not VPS_EXPIRY_NOTIFIED and (VPS_EXPIRY - date.today()).days <= 5:
-                VPS_EXPIRY_NOTIFIED = True
-                _tg_call("sendMessage", {
-                    "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                    "text": (
-                        f"\u26A0\ufe0f *El VPS vence en {(VPS_EXPIRY - date.today()).days} d\u00edas*\n"
-                        f"Fecha: {VPS_EXPIRY}\n"
-                        f"Cancelar en Kamatera para evitar cobros."
-                    )
-                })
-
-            # Cambio de estado sueño -> despierto
-            if activo and _ESTADO_SUENO == "dormido":
-                _ESTADO_SUENO = "despierto"
-                enviar_menu(texto="\u2600\ufe0f *Buenos d\u00edas!* Bot activo.")
-                print("  >>> Buenos dias!", flush=True)
-            elif not activo and _ESTADO_SUENO != "dormido":
-                _ESTADO_SUENO = "dormido"
-                print("  >>> Modo silencioso (12 AM - 7 AM)", flush=True)
-
-            if _ESTADO_SUENO is None:
-                _ESTADO_SUENO = "despierto" if activo else "dormido"
-
-            # ============================================================
-            # MONITOREO INTERVENCION BCV via @subastasBCV
-            # ============================================================
+            if not en_horario():
+                time.sleep(15)
+                continue
             bcv = scrape_subastasbcv()
             if bcv is not None:
                 prev = _BCV_BDV_ACTIVO
@@ -1388,6 +1362,42 @@ def loop_monitoreo():
                     print(f">>> BCV BDV cambio: {'ACTIVA' if bcv['activo'] else 'CERRADA'} <<<", flush=True)
                 if prev is None:
                     _BCV_BDV_ACTIVO = bcv["activo"]
+        except Exception as e:
+            print(f"Error en loop BCV: {e}", flush=True)
+        time.sleep(15)
+
+
+def loop_monitoreo():
+    global _ESTADO_SUENO, VPS_EXPIRY_NOTIFIED
+    print("  Monitoreo cada 60s...", flush=True)
+    ciclo = 0
+    while True:
+        try:
+            activo = en_horario()
+
+            # Notificar vencimiento VPS 5 dias antes
+            if not VPS_EXPIRY_NOTIFIED and (VPS_EXPIRY - date.today()).days <= 5:
+                VPS_EXPIRY_NOTIFIED = True
+                _tg_call("sendMessage", {
+                    "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                    "text": (
+                        f"\u26A0\ufe0f *El VPS vence en {(VPS_EXPIRY - date.today()).days} d\u00edas*\n"
+                        f"Fecha: {VPS_EXPIRY}\n"
+                        f"Cancelar en Kamatera para evitar cobros."
+                    )
+                })
+
+            # Cambio de estado sueño -> despierto
+            if activo and _ESTADO_SUENO == "dormido":
+                _ESTADO_SUENO = "despierto"
+                enviar_menu(texto="\u2600\ufe0f *Buenos d\u00edas!* Bot activo.")
+                print("  >>> Buenos dias!", flush=True)
+            elif not activo and _ESTADO_SUENO != "dormido":
+                _ESTADO_SUENO = "dormido"
+                print("  >>> Modo silencioso (12 AM - 7 AM)", flush=True)
+
+            if _ESTADO_SUENO is None:
+                _ESTADO_SUENO = "despierto" if activo else "dormido"
 
             mejores = []
             for asset in ASSETS_VES:
@@ -1576,6 +1586,7 @@ if __name__ == "__main__":
 
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
+        threading.Thread(target=_loop_bcv_scrape, daemon=True).start()
         time.sleep(2)
         extra = ""
         if not en_horario():
