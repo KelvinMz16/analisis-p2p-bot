@@ -35,5 +35,25 @@ Analizar los precios de compra y venta del mercado P2P de Binance para bolívare
    * **0.50%** comisiones Maker de Binance (0.25% compra + 0.25% venta).
    * **0.30%** comisión bancaria estimada por transferencias de Pago Móvil / BDV.
 2. **Filtro Inteligente de Monto:** Permite alternar mediante botones de Telegram entre montos de órdenes mínimas: Mayorista (0 Bs), $5 (4K Bs), $10 (8K Bs) y $20 (16K Bs).
+## Estado Actual (2026-06-25)
+- **Servidor de salud:** iniciado en `0.0.0.0:8080` sin errores de puerto.
+- **Supabase:** inserciones exitosas en la tabla `historical_prices` (permiso `SELECT, INSERT` concedido al rol `anon`).
+- **Código:** eliminación del servidor HTTP duplicado y consolidación en una única función `_run_health_server()`.
+- **Space:** despliegue exitoso y logs sin excepciones.
+
 3. **Restricción de Alertas:** Para evitar alertas basura basadas en spreads ficticios por falta de liquidez en altcoins, el bot **únicamente envía alertas de oportunidad y recuperación para USDT y USDC**. (Las criptomonedas volátiles como BTC, ETH, BNB y SOL se analizan y guardan en base de datos pero no generan spam en Telegram).
 4. **Comparador Automático:** Si una alerta se genera en un mercado fraccionado ($5/$10/$20), el mensaje de Telegram calcula de forma automática un escenario comparativo vendiendo todo de golpe en el mercado Mayorista, y viceversa, para ayudar al operador a evaluar la mejor estrategia.
+
+## Arbitraje DEX Multi-Red (Nuevo)
+El bot ahora incluye un panel de **Arbitraje DEX Multi-Red** accesible desde el menú de Telegram (`🌌 DEX Multi-Red`). Este módulo compara en tiempo real el precio **Spot** (vía CoinGecko con fallback a DexScreener) contra el precio promedio en **DEX descentralizados** para tres redes:
+
+| Red | Token | DEX Monitoreados | Costo Retiro Estimado |
+|-----|-------|-------------------|----------------------|
+| **Solana** | SOL | Jupiter, Orca, Raydium | ~$0.03 |
+| **Polygon** | POL | QuickSwap, Uniswap V3 | ~$0.01 |
+| **BNB Chain** | BNB | PancakeSwap, Uniswap | ~$0.28 |
+
+* **Fuente de precios Spot:** CoinGecko API (gratuita, sin bloqueo regional). Si da error 429 (rate limit), usa DexScreener como fallback.
+* **Fuente de precios DEX:** DexScreener API (busca pares USDC/USDT en la cadena nativa).
+* **Wallet recomendada:** Phantom (soporta Solana, Polygon, BSC y Ethereum). El botón "Operar" dentro de Phantom ejecuta swaps vía Jupiter (Solana) o agregadores nativos (otras redes).
+* **Modo de operación:** Semi-automático. El bot detecta y alerta; el usuario ejecuta manualmente desde Phantom y Binance.

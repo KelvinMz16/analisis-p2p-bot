@@ -283,7 +283,7 @@ def _construir_teclado():
         [{"text": "\U0001F4B0 Precio", "callback_data": "precio"},
          {"text": "\U0001F500 Combo", "callback_data": "combo"},
          {"text": "\U0001F4CA Multi-cripto", "callback_data": "arbitraje"}],
-        [{"text": "🌌 SOL DEX Arbitraje", "callback_data": "sol_dex_arbitraje"}],
+        [{"text": "🌌 DEX Multi-Red", "callback_data": "dex_multired"}],
         [{"text": f"\u2699\ufe0f Capital (${CONFIG['capital']:.0f})", "callback_data": "capital"},
          {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
         [{"text": f"\U0001F6D2 Filtro: {nombre_filtro()}", "callback_data": "ciclo_filtro"},
@@ -356,44 +356,126 @@ def obtener_precio_p2p(trade_type, asset="USDT", trans_amount=0):
         return None
 
 
-def obtener_precio_dex_solana():
-    """Obtiene el precio promedio de SOL/USDC y SOL/USDT en Solana DEX via DexScreener API."""
-    url = "https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112"
+# ============================================================
+# ARBITRAJE DEX MULTI-RED
+# ============================================================
+# Configuración de redes soportadas para arbitraje Spot vs DEX
+DEX_NETWORKS = {
+    "SOL": {
+        "nombre": "Solana",
+        "chain_id": "solana",
+        "token_address": "So11111111111111111111111111111111111111112",
+        "coingecko_id": "solana",
+        "binance_symbol": "SOLUSDT",
+        "costo_retiro_usd": 0.03,  # ~0.0005 SOL
+        "swap_fee_pct": 0.002,     # 0.20% slippage+fee típico
+        "wallet": "Phantom (Solana)",
+        "dex_principales": "Jupiter/Orca/Raydium",
+    },
+    "POL": {
+        "nombre": "Polygon",
+        "chain_id": "polygon",
+        "token_address": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+        "coingecko_id": "polygon-ecosystem-token",
+        "binance_symbol": "POLUSDT",
+        "costo_retiro_usd": 0.01,  # ~0.1 POL
+        "swap_fee_pct": 0.003,     # 0.30% slippage+fee típico
+        "wallet": "Phantom (Polygon)",
+        "dex_principales": "QuickSwap/Uniswap V3",
+    },
+    "BNB": {
+        "nombre": "BNB Chain",
+        "chain_id": "bsc",
+        "token_address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+        "coingecko_id": "binancecoin",
+        "binance_symbol": "BNBUSDT",
+        "costo_retiro_usd": 0.28,  # ~0.0005 BNB
+        "swap_fee_pct": 0.002,     # 0.20% slippage+fee típico
+        "wallet": "Phantom (BSC)",
+        "dex_principales": "PancakeSwap/Uniswap",
+    },
+}
+
+
+def obtener_precio_dex(network_key):
+    """Obtiene el precio promedio de un token en su DEX nativo via DexScreener API."""
+    cfg = DEX_NETWORKS.get(network_key)
+    if not cfg:
+        return None
+    url = f"https://api.dexscreener.com/latest/dex/tokens/{cfg['token_address']}"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
         pairs = resp.json().get("pairs", [])
         prices = []
         for p in pairs:
-            if p.get("chainId") == "solana" and p.get("quoteToken", {}).get("symbol") in ["USDC", "USDT"]:
+            if p.get("chainId") == cfg["chain_id"] and p.get("quoteToken", {}).get("symbol") in ["USDC", "USDT"]:
                 price_str = p.get("priceUsd")
                 if price_str:
                     prices.append(float(price_str))
         if prices:
             return sum(prices) / len(prices)
     except Exception as e:
-        print(f"[DEX/SOL] Error: {e}", flush=True)
+        print(f"[DEX/{network_key}] Error: {e}", flush=True)
     return None
 
 
-def obtener_precio_spot_solana():
-    """Obtiene el precio de SOL en CoinGecko (con fallback a DexScreener si da 429)."""
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
+def obtener_precio_spot(network_key):
+    """Obtiene el precio spot via CoinGecko, con fallback a DexScreener si da 429."""
+    cfg = DEX_NETWORKS.get(network_key)
+    if not cfg:
+        return None
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
-        price = float(resp.json().get("solana", {}).get("usd", 0))
+        price = float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
         if price > 0:
             return price
     except Exception as e:
-        print(f"[CoinGecko/SOL] Error (usando fallback): {e}", flush=True)
-    
-    # Fallback: Si CoinGecko da rate limit (429), usamos el precio de DexScreener que ya funciona
-    print("[CoinGecko/SOL] Usando precio de DEX como referencia para Spot", flush=True)
-    return obtener_precio_dex_solana()
+        print(f"[CoinGecko/{network_key}] Error (fallback): {e}", flush=True)
+    # Fallback a DexScreener
+    print(f"[CoinGecko/{network_key}] Usando DEX como referencia Spot", flush=True)
+    return obtener_precio_dex(network_key)
 
 
+def calcular_arbitraje_dex(network_key):
+    """Calcula la oportunidad de arbitraje Spot vs DEX para una red específica."""
+    cfg = DEX_NETWORKS.get(network_key)
+    if not cfg:
+        return None
+    spot = obtener_precio_spot(network_key)
+    dex = obtener_precio_dex(network_key)
+    if not spot or not dex:
+        return None
 
+    diff = dex - spot
+    pct_bruto = (diff / spot) * 100
+
+    costo_retiro = cfg["costo_retiro_usd"]
+    costo_swap = cfg["swap_fee_pct"] * CONFIG["capital"]
+    costos_totales = costo_retiro + costo_swap
+
+    ganancia_bruta = (CONFIG["capital"] / spot) * dex - CONFIG["capital"]
+    ganancia_neta = ganancia_bruta - costos_totales
+    pct_neto = (ganancia_neta / CONFIG["capital"]) * 100 if CONFIG["capital"] > 0 else 0
+
+    return {
+        "network": network_key,
+        "nombre": cfg["nombre"],
+        "spot": spot,
+        "dex": dex,
+        "diff": diff,
+        "pct_bruto": pct_bruto,
+        "costos": costos_totales,
+        "ganancia_bruta": ganancia_bruta,
+        "ganancia_neta": ganancia_neta,
+        "pct_neto": pct_neto,
+        "wallet": cfg["wallet"],
+        "dex_principales": cfg["dex_principales"],
+        "costo_retiro": costo_retiro,
+    }
+# ============================================================
 
 
 def calcular_margen(asset, trans_amount=None):
@@ -951,44 +1033,49 @@ def procesar_callback(cq):
             lines.append(f"\n\u23F3 Sin oportunidades ahora")
         editar_mensaje(chat_id, msg_id, "\n".join(lines))
 
-    elif data == "sol_dex_arbitraje":
+    elif data == "dex_multired":
         try:
-            spot = obtener_precio_spot_solana()
-            dex = obtener_precio_dex_solana()
-            if spot and dex:
-                diff = dex - spot
-                pct = (diff / spot) * 100
-                
-                # Estimación de costos fijos de un ciclo (valores de referencia)
-                costo_retiro = 0.0005 * spot  # ~ 0.03 USD
-                costo_swap_y_slippage = 0.002 * CONFIG["capital"] # ~ 0.20% del capital
-                costos_totales = costo_retiro + costo_swap_y_slippage
-                
-                ganancia_bruta = (CONFIG["capital"] / spot) * dex - CONFIG["capital"]
-                ganancia_neta = ganancia_bruta - costos_totales
-                pct_neto = (ganancia_neta / CONFIG["capital"]) * 100 if CONFIG["capital"] > 0 else 0
-                
-                estado_arbi = "🟢 OPORTUNIDAD DETECTADA" if ganancia_neta > 0 else "🔴 NO RENTABLE AHORA"
-                
-                msg = (
-                    f"🌌 *Arbitraje SOL/USDT (Binance ➔ Solana DEX)*\n\n"
-                    f"🔹 *Precio Spot (Binance):* {spot:.4f} USDT\n"
-                    f"🔸 *Precio Promedio DEX:* {dex:.4f} USDT\n"
-                    f"📊 *Diferencia Bruta:* {diff:+.4f} USDT ({pct:+.2f}%)\n\n"
-                    f"💸 *Estimación con tu capital (${CONFIG['capital']:.0f}):*\n"
-                    f"- Ganancia Bruta: ${ganancia_bruta:.4f} USDT\n"
-                    f"- Costos estimados (Retiro + Slippage): ${costos_totales:.4f} USDT\n"
-                    f"- *Ganancia Neta:* *${ganancia_neta:.4f} USDT* ({pct_neto:+.2f}%)\n\n"
-                    f"📌 *Estado:* {estado_arbi}\n\n"
-                    f"_Nota: El arbitraje DEX requiere transferir SOL a tu wallet Phantom, hacer swap a USDT en Jupiter/Orca y retornar el USDT a Binance._"
-                )
+            resultados = []
+            for nk in DEX_NETWORKS:
+                r = calcular_arbitraje_dex(nk)
+                if r:
+                    resultados.append(r)
+                time.sleep(0.3)
+
+            if resultados:
+                resultados.sort(key=lambda x: x["pct_neto"], reverse=True)
+                mejor = resultados[0]
+
+                msg = f"🌌 *Arbitraje DEX Multi-Red* (Capital: ${CONFIG['capital']:.0f})\n\n"
+
+                for r in resultados:
+                    icono = "🟢" if r["ganancia_neta"] > 0 else "🔴"
+                    estrella = " 🏆" if r == mejor else ""
+                    msg += (
+                        f"{icono} *{r['network']}* ({r['nombre']}){estrella}\n"
+                        f"   Spot: ${r['spot']:.4f} | DEX: ${r['dex']:.4f}\n"
+                        f"   Spread: {r['pct_bruto']:+.2f}% | Costos: ${r['costos']:.3f}\n"
+                        f"   *Neto: ${r['ganancia_neta']:.4f}* ({r['pct_neto']:+.2f}%)\n"
+                        f"   Wallet: {r['wallet']} | DEX: {r['dex_principales']}\n\n"
+                    )
+
+                if mejor["ganancia_neta"] > 0:
+                    msg += (
+                        f"🏆 *Mejor opción: {mejor['network']} ({mejor['nombre']})*\n"
+                        f"Ganancia neta estimada: *${mejor['ganancia_neta']:.4f} USDT*\n"
+                        f"Usa {mejor['wallet']} ➔ Operar ➔ Swap en {mejor['dex_principales']}\n"
+                    )
+                else:
+                    msg += "⏳ Ninguna red es rentable en este momento. El bot seguirá monitoreando.\n"
+
+                msg += "\n_Tip: Usa el botón Operar de Phantom para hacer swap._"
             else:
-                msg = "⚠️ No se pudieron obtener los precios de Solana (Spot o DEX) en este momento. Intenta de nuevo."
-            
+                msg = "⚠️ No se pudieron obtener precios de ninguna red. Intenta de nuevo."
+
             kb = json.dumps({
                 "inline_keyboard": [
                     [{"text": "🏠 Inicio", "callback_data": "menu"},
-                     {"text": "🔄 Actualizar", "callback_data": "sol_dex_arbitraje"}]
+                     {"text": "🔄 Actualizar", "callback_data": "dex_multired"}]
                 ]
             })
             _tg_call("editMessageText", {
@@ -997,8 +1084,8 @@ def procesar_callback(cq):
                 "reply_markup": kb
             }, ignore_400=True)
         except Exception as e:
-            print(f"Error en callback sol_dex_arbitraje: {e}", flush=True)
-            editar_mensaje(chat_id, msg_id, "Error al calcular arbitraje SOL DEX.")
+            print(f"Error en callback dex_multired: {e}", flush=True)
+            editar_mensaje(chat_id, msg_id, "Error al calcular arbitraje DEX Multi-Red.")
 
     elif data == "menu":
 
