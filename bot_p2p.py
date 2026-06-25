@@ -393,10 +393,18 @@ DEX_NETWORKS = {
         "token_address": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
         "coingecko_id": "polygon-ecosystem-token",
         "binance_symbol": "POLUSDT",
-        "costo_retiro_usd": 0.01,  # ~0.1 POL
-        "swap_fee_pct": 0.003,     # 0.30% slippage+fee típico
+        "costo_retiro_usd": 0.01,
+        "swap_fee_pct": 0.003,
         "wallet": "Phantom (Polygon)",
-        "dex_principales": "QuickSwap/Uniswap V3",
+        "dex_principales": "ParaSwap/QuickSwap",
+        "paraswap": {
+            "src_token": "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+            "dest_token": "0x2791Bca1f2de4661ED88A30C99a7a9449Aa84174",
+            "amount": "1000000000000000000",
+            "src_decimals": 18,
+            "dest_decimals": 6,
+            "chain_id": 137
+        }
     },
     "BNB": {
         "nombre": "BNB Chain",
@@ -404,10 +412,18 @@ DEX_NETWORKS = {
         "token_address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
         "coingecko_id": "binancecoin",
         "binance_symbol": "BNBUSDT",
-        "costo_retiro_usd": 0.28,  # ~0.0005 BNB
-        "swap_fee_pct": 0.002,     # 0.20% slippage+fee típico
+        "costo_retiro_usd": 0.28,
+        "swap_fee_pct": 0.002,
         "wallet": "Phantom (BSC)",
-        "dex_principales": "PancakeSwap/Uniswap",
+        "dex_principales": "ParaSwap/PancakeSwap",
+        "paraswap": {
+            "src_token": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+            "dest_token": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+            "amount": "1000000000000000000",
+            "src_decimals": 18,
+            "dest_decimals": 18,
+            "chain_id": 56
+        }
     },
 }
 
@@ -431,17 +447,65 @@ def obtener_precio_jupiter_sol():
     return None
 
 
+def obtener_precio_paraswap(network_key):
+    """Swap token -> USDC via ParaSwap (agregador multi-chain EVM).
+    Retorna cuantos USD recibes por 1 token vendido en el DEX."""
+    cfg = DEX_NETWORKS.get(network_key)
+    if not cfg:
+        return None
+    ps = cfg.get("paraswap")
+    if not ps:
+        return None
+    url = ("https://apiv5.paraswap.io/prices/"
+           f"?srcToken={ps['src_token']}&destToken={ps['dest_token']}"
+           f"&amount={ps['amount']}&srcDecimals={ps['src_decimals']}"
+           f"&destDecimals={ps['dest_decimals']}&side=SELL&network={ps['chain_id']}")
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        dest_amount = int(data.get("priceRoute", {}).get("destAmount", 0))
+        if dest_amount > 0:
+            return dest_amount / (10 ** ps['dest_decimals'])
+    except Exception as e:
+        print(f"[ParaSwap/{network_key}] Error: {e}", flush=True)
+    return None
+
+
+def obtener_precio_jupiter_sol():
+    """Swap SOL -> USDC en Jupiter (lo que Phantom usa internamente)."""
+    try:
+        amount = 1_000_000_000
+        url = ("https://quote-api.jup.ag/v6/quote"
+               f"?inputMint=So11111111111111111111111111111111111111112"
+               f"&outputMint=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+               f"&amount={amount}&slippageBps=50")
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        out_amount = int(resp.json().get("outAmount", 0))
+        if out_amount > 0:
+            return out_amount / 1_000_000
+    except Exception as e:
+        print(f"[Jupiter/SOL] Error: {e}", flush=True)
+    return None
+
+
 def obtener_precio_dex(network_key):
-    """Obtiene precio de venta del token en DEX.
-    Para SOL usa Jupiter API (swap real en Phantom).
-    Para POL/BNB usa DexScreener par con mayor liquidez."""
+    """Precio de venta del token en DEX.
+    SOL -> Jupiter | POL/BNB -> ParaSwap | fallback DexScreener mayor liquidez."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
     if network_key == "SOL":
-        precio = obtener_precio_jupiter_sol()
-        if precio:
-            return precio
+        p = obtener_precio_jupiter_sol()
+        if p:
+            print(f"  [DEX/{network_key}] Jupiter: ${p:.4f}", flush=True)
+            return p
+    else:
+        p = obtener_precio_paraswap(network_key)
+        if p:
+            print(f"  [DEX/{network_key}] ParaSwap: ${p:.4f}", flush=True)
+            return p
     url = f"https://api.dexscreener.com/latest/dex/tokens/{cfg['token_address']}"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
@@ -458,6 +522,7 @@ def obtener_precio_dex(network_key):
                     best_price = float(price_str)
                     best_liq = liq
         if best_price:
+            print(f"  [DEX/{network_key}] DexScreener: ${best_price:.4f} (liq: ${best_liq:.0f})", flush=True)
             return best_price
     except Exception as e:
         print(f"[DEX/{network_key}] Error: {e}", flush=True)
@@ -465,8 +530,6 @@ def obtener_precio_dex(network_key):
 
 
 def obtener_precio_binance_ask(symbol):
-    """Obtiene el ASK (precio de compra) desde el book de Binance.
-    Es lo que realmente pagas al comprar en Spot."""
     url = f"https://api.binance.com/api/v3/depth?symbol={symbol}&limit=1"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
@@ -479,44 +542,29 @@ def obtener_precio_binance_ask(symbol):
     return None
 
 
-def obtener_precio_binance_spot(symbol):
-    """Obtiene precio spot desde la API pública de Binance (fallback)."""
-    url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        return float(resp.json().get("price", 0))
-    except Exception as e:
-        print(f"[BinanceSpot/{symbol}] Error: {e}", flush=True)
-        return None
-
-
 def obtener_precio_spot(network_key):
-    """Obtiene el precio spot via CoinGecko, con fallback a Binance ask/ticker, luego DexScreener.
-    Retorna el ASK (precio de compra) cuando es posible."""
+    """Precio de COMPRA en Binance (ASK del order book).
+    Sin CoinGecko (429s frecuentes), sin DexScreener (misma fuente que DEX)."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
-    url = f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd"
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        price = float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
-        if price > 0:
-            return price
-    except Exception as e:
-        print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
-    # Fallback: ASK de Binance (precio de compra real)
     price = obtener_precio_binance_ask(cfg["binance_symbol"])
     if price and price > 0:
+        print(f"  [Spot/{network_key}] Binance ASK: ${price:.4f}", flush=True)
         return price
     # Fallback: ticker de Binance
-    price = obtener_precio_binance_spot(cfg["binance_symbol"])
-    if price and price > 0:
-        return price
-    # Fallback final a DexScreener
-    print(f"[Spot/{network_key}] Usando DEX como referencia (sin spot propio)", flush=True)
-    return obtener_precio_dex(network_key)
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={cfg['binance_symbol']}"
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        price = float(resp.json().get("price", 0))
+        if price > 0:
+            print(f"  [Spot/{network_key}] Binance ticker: ${price:.4f}", flush=True)
+            return price
+    except Exception as e:
+        print(f"[BinanceSpot/{cfg['binance_symbol']}] Error: {e}", flush=True)
+    print(f"  [Spot/{network_key}] Sin precio spot disponible", flush=True)
+    return None
 
 
 def calcular_arbitraje_dex(network_key):
