@@ -512,10 +512,34 @@ def _fetch_all_spot_prices():
         return _COINGECKO_CACHE["data"] or {}
 
 
+def _fetch_spot_p2p(network_key):
+    if network_key == "USDC":
+        usdt_buy = obtener_precio_p2p("BUY", "USDT")
+        usdc_buy = obtener_precio_p2p("BUY", "USDC")
+        if usdt_buy and usdc_buy:
+            return usdc_buy / usdt_buy
+        return None
+    usdt_compra = obtener_precio_p2p("SELL", "USDT")
+    usdt_venta = obtener_precio_p2p("BUY", "USDT")
+    if not usdt_compra or not usdt_venta:
+        return None
+    usdt_mid = (usdt_compra + usdt_venta) / 2
+    asset_compra = obtener_precio_p2p("SELL", network_key)
+    asset_venta = obtener_precio_p2p("BUY", network_key)
+    if not asset_compra or not asset_venta:
+        return None
+    asset_mid = (asset_compra + asset_venta) / 2
+    return asset_mid / usdt_mid
+
+
 def obtener_precio_spot(network_key):
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
+    price = _fetch_spot_p2p(network_key)
+    if price and price > 0:
+        print(f"  [Spot/{network_key}] P2P-derivado: ${price:.4f}", flush=True)
+        return price
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
