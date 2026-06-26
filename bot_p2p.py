@@ -1579,6 +1579,8 @@ def loop_monitoreo():
                             )
                         })
 
+                if top:
+                    print(f"  [debug] USDT margen={top['margen']:+.2f}% umbral={CONFIG['margen_objetivo']}% enviada={'USDT' in ALERTA_ENVIADA}", flush=True)
                 if top and top["margen"] >= CONFIG["margen_objetivo"] and top["asset"] not in ALERTA_ENVIADA:
                     ALERTA_ENVIADA.add(top["asset"])
                     print(f">>> OPORTUNIDAD {top['asset']} <<<", flush=True)
