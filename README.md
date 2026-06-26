@@ -4,6 +4,6 @@ emoji: 💰
 colorFrom: green
 colorTo: green
 sdk: docker
-app_port: 7860
+app_port: 8888
 pinned: false
 ---

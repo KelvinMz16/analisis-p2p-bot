@@ -6,10 +6,37 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import socket
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
 
+# ============================================================
+# HEALTH SERVER (primero que todo, antes de cualquier fallo)
+# ============================================================
+def _health_server():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", 8888))
+        s.listen(20)
+        while True:
+            conn, _ = s.accept()
+            try:
+                conn.recv(1024)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            except:
+                pass
+            finally:
+                try:
+                    conn.close()
+                except:
+                    pass
+    except:
+        pass
+
+threading.Thread(target=_health_server, daemon=True).start()
+# ============================================================
 
 # ============================================================
 # CONFIGURACION (persistente via HF Secrets)
