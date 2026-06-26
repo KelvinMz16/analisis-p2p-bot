@@ -744,21 +744,18 @@ def analizar_historico_horarios():
     ventas_por_hora.clear()
 
     for rec in registros:
-        # Soporte para campo 'fecha' o 'created_at'
-        timestamp = rec.get("fecha") or rec.get("created_at")
-        if not timestamp:
+        ts_raw = rec.get("ts")
+        if not ts_raw:
             continue
         try:
-            if isinstance(timestamp, str):
-                # Eliminar sufijo Z o zona horaria si es necesario
-                ts_clean = timestamp.replace("Z", "+00:00")
-                hour = datetime.fromisoformat(ts_clean).hour
-            else:
-                hour = int(timestamp)
+            hour = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).hour
         except Exception:
             continue
-        compra = rec.get("compra") or rec.get("maker_compra") or rec.get("precio_compra")
-        venta = rec.get("venta") or rec.get("maker_venta") or rec.get("precio_venta")
+        usdt = rec.get("USDT")
+        if not isinstance(usdt, dict):
+            continue
+        compra = usdt.get("compra")
+        venta = usdt.get("venta")
         if compra is not None:
             try:
                 compras_por_hora[hour].append(float(compra))
