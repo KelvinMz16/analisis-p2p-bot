@@ -7,6 +7,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot_p2p.py .
+COPY bot_p2p.py run.py .
 
-CMD ["python", "-u", "bot_p2p.py"]
+CMD ["python", "-u", "run.py"]
