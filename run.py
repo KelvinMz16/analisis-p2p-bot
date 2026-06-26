@@ -11,9 +11,11 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 def test():
-    print("TEST: import bot_p2p...", flush=True)
+    print("A: import bot_p2p", flush=True)
     import bot_p2p
-    print("TEST: OK", flush=True)
+    print("B: guardar_config_local", flush=True)
+    bot_p2p.guardar_config_local()
+    print("C: thread vivo", flush=True)
     while True:
         time.sleep(60)
 
