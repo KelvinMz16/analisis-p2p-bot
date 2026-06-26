@@ -56,12 +56,9 @@ def supabase_upsert(record):
         return None
 
 def supabase_select_all():
-    """Retrieve all records from the Supabase table.
-    Returns a list of dicts.
-    """
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase credentials not set in environment")
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*"
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -1194,17 +1191,8 @@ def procesar_callback(cq):
                     with open(HISTORIAL_PATH, "r") as f:
                         lineas = f.readlines()
             if not lineas:
-                print(f"[Historial] 0 lineas de Supabase ni JSONL", flush=True)
                 editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
                 return
-
-            print(f"[Historial] {len(lineas)} registros obtenidos", flush=True)
-            if lineas:
-                try:
-                    d = json.loads(lineas[0])
-                    print(f"[Historial] primer registro keys={list(d.keys())} ts={d.get('ts','?')}", flush=True)
-                except Exception as e:
-                    print(f"[Historial] error parseando primero: {e}", flush=True)
 
             hoy_vet = datetime.now(VENEZUELA_TZ).date()
             lineas_hoy = []
@@ -1214,8 +1202,7 @@ def procesar_callback(cq):
                     dt_ts = datetime.fromisoformat(str(d["ts"]).replace("Z", "+00:00"))
                     if dt_ts.date() == hoy_vet:
                         lineas_hoy.append(d)
-                except Exception as e:
-                    print(f"[Historial] skip linea: {e}", flush=True)
+                except Exception:
                     continue
             
             total_hoy = len(lineas_hoy)
