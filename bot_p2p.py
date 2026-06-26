@@ -1261,6 +1261,8 @@ def polling_telegram():
 # ============================================================
 # HEALTH SERVER (requerido por Hugging Face Spaces)
 # ============================================================
+import socket
+
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -1276,9 +1278,30 @@ def _run_health_server():
         print("Health server iniciado en 0.0.0.0:8080", flush=True)
         server.serve_forever()
     except Exception as e:
-        print(f"Health server error: {e}", flush=True)
+        print(f"Health server error 8080: {e}", flush=True)
+
+def _run_health_raw(port):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", port))
+        s.listen(5)
+        print(f"Health server raw en puerto {port}", flush=True)
+        while True:
+            conn, addr = s.accept()
+            try:
+                conn.recv(1024)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+            except:
+                pass
+            finally:
+                conn.close()
+    except Exception as e:
+        print(f"Health server raw puerto {port} error: {e}", flush=True)
 
 threading.Thread(target=_run_health_server, daemon=True).start()
+threading.Thread(target=_run_health_raw, args=(7860,), daemon=True).start()
+time.sleep(0.3)
 # ============================================================
 
 
