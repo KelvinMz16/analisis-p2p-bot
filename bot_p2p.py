@@ -430,7 +430,30 @@ DEX_NETWORKS = {
 }
 
 
-_COINGECKO_CACHE = {"data": None, "ts": 0}
+# Mapeo de coingecko_id → símbolo Bybit
+_CG_TO_BYBIT = {
+    "solana": "SOLUSDT",
+    "polygon-ecosystem-token": "POLUSDT",
+    "binancecoin": "BNBUSDT",
+}
+_BYBIT_CACHE = {"data": None, "ts": 0}
+
+
+def _bybit_url(path):
+    """Usa proxy Cloudflare si está disponible, sino directo a Bybit."""
+    if USE_PROXY and CLOUDFLARE_PROXY:
+        return f"{CLOUDFLARE_PROXY}/bybit-api/{path}"
+    return f"https://api.bybit.com/{path}"
+
+
+def _try_bybit(url, timeout=5):
+    """Intenta GET a URL, retorna response si ok, None si falla."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=timeout)
+        resp.raise_for_status()
+        return resp
+    except Exception:
+        return None
 
 
 def _fetch_spot_single(network_key):
@@ -438,37 +461,55 @@ def _fetch_spot_single(network_key):
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
-    try:
-        resp = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd",
-            headers=HEADERS, timeout=5
-        )
-        resp.raise_for_status()
-        return float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
-    except Exception as e:
-        print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
+    symbol = _CG_TO_BYBIT.get(cfg["coingecko_id"])
+    if not symbol:
+        return None
+    path = f"v5/market/tickers?category=spot&symbol={symbol}"
+    proxy_url = _bybit_url(path)
+    direct_url = f"https://api.bybit.com/{path}"
+    # intentar proxy primero, fallback directo
+    for label, url in [("proxy", proxy_url), ("directo", direct_url)]:
+        if label == "directo" and url == proxy_url:
+            continue  # mismo URL, saltar
+        resp = _try_bybit(url)
+        if resp:
+            items = resp.json().get("result", {}).get("list", [])
+            if items:
+                return float(items[0].get("lastPrice", 0))
+    print(f"[Bybit/{network_key}] Sin precio disponible", flush=True)
     return None
 
 
 def _fetch_all_spot_prices():
-    """Batch todos los assets en una llamada, cacheado 10s."""
+    """Batch vía Bybit (filtra 3 símbolos), cacheado 10s."""
     ahora = time.time()
-    if _COINGECKO_CACHE["data"] and (ahora - _COINGECKO_CACHE["ts"]) < 10:
-        return _COINGECKO_CACHE["data"]
-    ids = ",".join(cfg["coingecko_id"] for nk, cfg in DEX_NETWORKS.items() if cfg.get("coingecko_id"))
-    try:
-        resp = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
-            headers=HEADERS, timeout=5
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        _COINGECKO_CACHE["data"] = data
-        _COINGECKO_CACHE["ts"] = ahora
-        return data
-    except Exception as e:
-        print(f"[CoinGecko/batch] Error: {e}", flush=True)
-        return _COINGECKO_CACHE["data"] or {}
+    if _BYBIT_CACHE["data"] and (ahora - _BYBIT_CACHE["ts"]) < 10:
+        return _BYBIT_CACHE["data"]
+    wanted = set(_CG_TO_BYBIT.values())
+    path = "v5/market/tickers?category=spot"
+    proxy_url = _bybit_url(path)
+    direct_url = f"https://api.bybit.com/{path}"
+    data = {}
+    for label, url in [("proxy", proxy_url), ("directo", direct_url)]:
+        if label == "directo" and url == proxy_url:
+            continue
+        resp = _try_bybit(url)
+        if resp:
+            try:
+                for item in resp.json().get("result", {}).get("list", []):
+                    sym = item.get("symbol")
+                    if sym in wanted:
+                        for cg_id, s in _CG_TO_BYBIT.items():
+                            if s == sym:
+                                data[cg_id] = {"usd": float(item.get("lastPrice", 0))}
+                                break
+                if data:
+                    break
+            except Exception:
+                continue
+    _BYBIT_CACHE["data"] = data
+    _BYBIT_CACHE["ts"] = ahora
+    return data
 
 
 def obtener_precio_spot(network_key):
@@ -478,7 +519,7 @@ def obtener_precio_spot(network_key):
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
-        print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
+        print(f"  [Spot/{network_key}] Bybit: ${price:.4f}", flush=True)
         return price
     time.sleep(0.5)
     price = _fetch_spot_single(network_key)

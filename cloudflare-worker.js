@@ -76,5 +76,27 @@ async function handleRequest(request) {
     }
   }
 
+  // Proxy for Bybit API (HF IP bloqueado / 403)
+  if (url.pathname.startsWith("/bybit-api/")) {
+    const restPath = url.pathname.replace("/bybit-api/", "");
+    const query = url.search;
+    const targetUrl = `https://api.bybit.com/${restPath}${query}`;
+    try {
+      const resp = await fetch(targetUrl, {
+        method: request.method,
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+      return new Response(await resp.text(), {
+        status: resp.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e.message }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
+
   return new Response("Not found", { status: 404 });
 }
