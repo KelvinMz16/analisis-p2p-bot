@@ -47,9 +47,13 @@ def supabase_upsert(record):
         "Prefer": "return=representation",
     }
     resp = requests.post(url, json=record, headers=headers, timeout=(5, 5))
+    print(f"[Supabase] POST status={resp.status_code} body={resp.text[:200]}", flush=True)
     if resp.status_code not in (200, 201):
-        print(f"[DEBUG] Supabase POST status={resp.status_code} response={resp.text[:300]}", flush=True)
-    return resp.json()
+        print(f"[DEBUG] Supabase POST failed: {resp.text[:300]}", flush=True)
+    try:
+        return resp.json()
+    except Exception:
+        return None
 
 def supabase_select_all():
     """Retrieve all records from the Supabase table.
