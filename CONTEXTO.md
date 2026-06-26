@@ -40,6 +40,50 @@ Analizar los precios de compra y venta del mercado P2P de Binance para bolívare
 - **Supabase:** inserciones exitosas en la tabla `historical_prices` (permiso `SELECT, INSERT` concedido al rol `anon`).
 - **Código:** eliminación del servidor HTTP duplicado y consolidación en una única función `_run_health_server()`.
 - **Space:** despliegue exitoso y logs sin excepciones.
+- **Scraping BCV:** Implementado `scrape_subastasbcv()` + `_loop_bcv_scrape()` (thread aparte cada 15s). Filtro de falsos positivos, stale detection (2h), multi-banco listo (BDV, Mercantil, BNC, BBVA, BT). Commit `d352f8c`.
+
+## Investigación @subastasBCV / BiciVe Ecosystem (2026-06-25)
+
+### Fuente principal: @subastasBCV (Telegram)
+- Canal público scraping vía `https://t.me/s/subastasBCV`
+- Posteado por **@SubastasVe_bot** (nombre: "BiciVe Bot", logo bicicleta)
+- Formato estructurado de bot: `INTERVENCIÓN ACTIVA/CERRADA`, `TASA:`, `MÍNIMO:`, `MÁXIMO:`, `HORA:`
+- Monitorea BDV en tiempo real (apertura/cierre de ventanilla de intervención)
+- **Mejor fuente para scraping** por ser formato de bot consistente
+
+### Calculadora asociada: bicical.online / bicical.vercel.app
+- Next.js app en Vercel, proyecto "bicical"
+- Footer: "© SUBASTAS⌁VE · v1.1"
+- Código de acceso: **KH5U**
+- APIs públicas:
+  - `GET /api/rates` → `{bcvUsd, bcvEur, intervencion, fechaValor}`
+  - `GET /api/binance-rate` → `{best, bestBank, timestamp}`
+- Funcionalidad: calculadora de arbitraje (tasa BCV vs P2P Binance)
+- No expone más datos de los que ya tenemos
+
+### Bots del mismo ecosistema
+| Bot | Nombre | Rol |
+|-----|--------|-----|
+| @SubastasVe_bot | BiciVe Bot | Publica intervenciones en @subastasBCV |
+| @Bicicalbot | BiciCal Bot | Bot de la calculadora bicical.online |
+| @pasandobot | Bici Bot 🚲 | Probablemente relay de información |
+
+### Dueño: ANÓNIMO (no identificado)
+- Dominio bicical.online: NameCheap con privacidad WHOIS (Islandia)
+- Registrado: 21 abril 2026
+- Sin presencia en LinkedIn, GitHub, HF Spaces, Reddit, foros
+- No se encontraron repositorios públicos con el nombre BiciVe
+- Todos los bots comparten el mismo logo de bicicleta (branding unificado)
+
+### Alternativas investigadas (no aptas para scraping)
+- **@e_positivo** (69.9K subs) — Monitoreo humano, formato inconsistente, stickers/emojis, no parseable
+- **@vemioficial** (25.7K subs) — Semi-estructurado pero humano, mezcla análisis con datos
+- **Descifrado / prensa** — Solo resúmenes diarios, no tiempo real
+- **BCV oficial** — Solo tasas de cierre, no estado de intervención
+- No existe página web que muestre estado de intervención por banco en tiempo real
+
+### Decisión
+Mantener @subastasBCV como única fuente de scraping. Es la más confiable por ser bot-generated. El multi-banco ya está implementado en el código para cuando @subastasBCV publique de otros bancos.
 
 3. **Restricción de Alertas:** Para evitar alertas basura basadas en spreads ficticios por falta de liquidez en altcoins, el bot **únicamente envía alertas de oportunidad y recuperación para USDT y USDC**. (Las criptomonedas volátiles como BTC, ETH, BNB y SOL se analizan y guardan en base de datos pero no generan spam en Telegram).
 4. **Comparador Automático:** Si una alerta se genera en un mercado fraccionado ($5/$10/$20), el mensaje de Telegram calcula de forma automática un escenario comparativo vendiendo todo de golpe en el mercado Mayorista, y viceversa, para ayudar al operador a evaluar la mejor estrategia.

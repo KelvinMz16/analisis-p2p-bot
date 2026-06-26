@@ -429,10 +429,13 @@ DEX_NETWORKS = {
 }
 
 
-_COINGECKO_CACHE = {"data": None, "ts": 0}
-
-
-_COINGECKO_CACHE = {"data": None, "ts": 0}
+# Mapeo de coingecko_id → símbolo Bybit
+_CG_TO_BYBIT = {
+    "solana": "SOLUSDT",
+    "polygon-ecosystem-token": "POLUSDT",
+    "binancecoin": "BNBUSDT",
+}
+_BYBIT_CACHE = {"data": None, "ts": 0}
 
 
 def _fetch_spot_single(network_key):
@@ -440,37 +443,50 @@ def _fetch_spot_single(network_key):
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
+    symbol = _CG_TO_BYBIT.get(cfg["coingecko_id"])
+    if not symbol:
+        return None
     try:
         resp = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd",
+            f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={symbol}",
             headers=HEADERS, timeout=5
         )
         resp.raise_for_status()
-        return float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
+        items = resp.json().get("result", {}).get("list", [])
+        if items:
+            return float(items[0].get("lastPrice", 0))
     except Exception as e:
-        print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
+        print(f"[Bybit/{network_key}] Error: {e}", flush=True)
     return None
 
 
 def _fetch_all_spot_prices():
-    """Batch todos los assets en una llamada, cacheado 10s."""
+    """Batch vía Bybit (filtra 3 símbolos), cacheado 10s."""
     ahora = time.time()
-    if _COINGECKO_CACHE["data"] and (ahora - _COINGECKO_CACHE["ts"]) < 10:
-        return _COINGECKO_CACHE["data"]
-    ids = ",".join(cfg["coingecko_id"] for nk, cfg in DEX_NETWORKS.items() if cfg.get("coingecko_id"))
+    if _BYBIT_CACHE["data"] and (ahora - _BYBIT_CACHE["ts"]) < 10:
+        return _BYBIT_CACHE["data"]
+    wanted = set(_CG_TO_BYBIT.values())
     try:
         resp = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
+            "https://api.bybit.com/v5/market/tickers?category=spot",
             headers=HEADERS, timeout=5
         )
         resp.raise_for_status()
-        data = resp.json()
-        _COINGECKO_CACHE["data"] = data
-        _COINGECKO_CACHE["ts"] = ahora
+        result = resp.json()
+        data = {}
+        for item in result.get("result", {}).get("list", []):
+            sym = item.get("symbol")
+            if sym in wanted:
+                for cg_id, s in _CG_TO_BYBIT.items():
+                    if s == sym:
+                        data[cg_id] = {"usd": float(item.get("lastPrice", 0))}
+                        break
+        _BYBIT_CACHE["data"] = data
+        _BYBIT_CACHE["ts"] = ahora
         return data
     except Exception as e:
-        print(f"[CoinGecko/batch] Error: {e}", flush=True)
-        return _COINGECKO_CACHE["data"] or {}
+        print(f"[Bybit/batch] Error: {e}", flush=True)
+        return _BYBIT_CACHE["data"] or {}
 
 
 def obtener_precio_spot(network_key):
@@ -480,9 +496,8 @@ def obtener_precio_spot(network_key):
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
-        print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
+        print(f"  [Spot/{network_key}] Bybit: ${price:.4f}", flush=True)
         return price
-    # Fallback individual si batch no tenia el precio (429 parcial)
     time.sleep(0.5)
     price = _fetch_spot_single(network_key)
     if price and price > 0:
