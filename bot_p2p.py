@@ -474,9 +474,7 @@ DEX_NETWORKS = {
 _COINGECKO_CACHE = {"data": None, "ts": 0}
 
 
-_BYBIT_CACHE = {"data": None, "ts": 0}
-
-BYBIT_SYMBOLS = {
+BINANCE_SYMBOLS = {
     "SOL": "SOLUSDT",
     "POL": "POLUSDT",
     "BNB": "BNBUSDT",
@@ -484,6 +482,8 @@ BYBIT_SYMBOLS = {
     "ETH": "ETHUSDT",
     "USDC": "USDCUSDT",
 }
+
+_BINANCE_CACHE = {"data": None, "ts": 0}
 
 
 def _fetch_spot_single(network_key):
@@ -524,45 +524,38 @@ def _fetch_all_spot_prices():
         return _COINGECKO_CACHE["data"] or {}
 
 
-def _fetch_all_bybit_prices():
+def _fetch_all_binance_prices():
     ahora = time.time()
-    if _BYBIT_CACHE["data"] and (ahora - _BYBIT_CACHE["ts"]) < 10:
-        return _BYBIT_CACHE["data"]
-    symbols = list(BYBIT_SYMBOLS.values())
+    if _BINANCE_CACHE["data"] and (ahora - _BINANCE_CACHE["ts"]) < 10:
+        return _BINANCE_CACHE["data"]
+    symbols = list(BINANCE_SYMBOLS.values())
+    symbols_str = '["' + '","'.join(symbols) + '"]'
+    url = f"{_PROXY_HTTP}/binance-api/api/v3/ticker/price?symbols={symbols_str}"
     try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
         result = {}
-        for sym in symbols:
-            resp = requests.get(
-                f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={sym}",
-                headers=HEADERS, timeout=5
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("retCode") == 0:
-                lst = data.get("result", {}).get("list", [])
-                if lst:
-                    result[sym] = float(lst[0].get("lastPrice", 0))
-        _BYBIT_CACHE["data"] = result
-        _BYBIT_CACHE["ts"] = ahora
+        for item in data:
+            result[item["symbol"]] = float(item["price"])
+        _BINANCE_CACHE["data"] = result
+        _BINANCE_CACHE["ts"] = ahora
         return result
     except Exception as e:
-        print(f"[Bybit/batch] Error: {e}", flush=True)
-        return _BYBIT_CACHE["data"] or {}
+        print(f"[Binance/Proxy] Error: {e}", flush=True)
+        return _BINANCE_CACHE["data"] or {}
 
 
 def obtener_precio_spot(network_key):
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
-    symbol = BYBIT_SYMBOLS.get(network_key)
+    symbol = BINANCE_SYMBOLS.get(network_key)
     if symbol:
-        bybit_data = _fetch_all_bybit_prices()
-        price = bybit_data.get(symbol, 0)
+        binance_data = _fetch_all_binance_prices()
+        price = binance_data.get(symbol, 0)
         if price and price > 0:
-            if network_key == "USDC":
-                print(f"  [Spot/{network_key}] Bybit: ${price:.6f}", flush=True)
-            else:
-                print(f"  [Spot/{network_key}] Bybit: ${price:.4f}", flush=True)
+            print(f"  [Spot/{network_key}] Binance: ${price:.4f}", flush=True)
             return price
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
