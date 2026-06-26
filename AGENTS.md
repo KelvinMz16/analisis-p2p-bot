@@ -74,11 +74,12 @@ Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras cripto
 | `quote-api.jup.ag` | ❌ DNS fail desde HF | Desactivado (ni Cloudflare proxy ayuda) |
 
 ## Estructura del bot
-- `bot_p2p.py` → Script principal (~1480 líneas)
+- `run.py` → Entrypoint. Health server (ThreadingHTTPServer) en MAIN THREAD, bot en daemon thread con import directo (sin subprocess). SHA actual: `d55b6d7`.
+- `bot_p2p.py` → Script principal (~1717 líneas). Importado directamente desde `run.py`.
 - `cloudflare-worker.js` → Worker de Cloudflare
-- `Dockerfile` → `python:3.11-slim`, `PYTHONUNBUFFERED=1`, `CMD ["python", "-u", "bot_p2p.py"]`
+- `Dockerfile` → `python:3.11-slim`, `PYTHONUNBUFFERED=1`, `CMD ["python3", "-u", "run.py"]`
 - `requirements.txt` → `requests>=2.31.0`
-- `README.md` → Frontmatter `sdk:docker` para HF Spaces
+- `README.md` → Frontmatter `sdk:docker`, `app_port: 7860` para HF Spaces
 - `guia-mercado-spot.md` → Guía de cómo comprar en Spot
 
 ## Funcionalidades
@@ -115,10 +116,30 @@ Bot Python que monitorea el mercado P2P de Binance para USDT/VES (y otras cripto
 - **Alertas automáticas:** Usa mismo umbral configurable (`margen_objetivo`)
 - **Alerta de recuperación DEX:** Cuando margen pasa de negativo a positivo
 
+## ⚠️ Problema crítico: contenedor nunca llega a RUNNING
+### Síntoma
+- El bot arranca, consulta P2P, calcula márgenes, pero **se cuelga en `supabase_upsert()`** (POST a Supabase nunca retorna)
+- HF Spaces nunca marca RUNNING — queda en BUILDING / RUNNING_APP_STARTING / RESTARTING loop
+- Health server responde 200 OK, pero HF igual reinicia el contenedor
+
+### Causa raíz (identificada 25-Jun-2026)
+1. **`supabase_upsert()` se cuelga** — `requests.post(url, timeout=10)` no respeta el timeout en ciertas condiciones de red desde HF Spaces (la conexión TCP establece pero el servidor no envía respuesta). La función bloquea el thread del bot indefinidamente.
+2. **Health server en thread daemon compitiendo por CPU** con `subprocess.call` del bot. En CPU única (`cpu-basic`), cuando el subprocess está atascado en un syscall (red), el health server daemon thread no recibe CPU a tiempo para responder HF health checks → HF lo considera no saludable → restart loop.
+
+### Solución aplicada (SHA: `d55b6d7`)
+- **Health server en MAIN THREAD** — responde siempre instantáneo, sin competencia
+- Bot en **daemon thread** con `import bot_p2p` directo (sin subprocess)
+- `supabase_upsert()` envuelta en **thread con timeout de 6s** + socket timeout 5s
+- Si Supabase no responde, el bot **sigue adelante** sin esa iteración
+
+### Pendiente de probar
+- Subir contenedor y verificar que llegue a RUNNING
+- Si aún no funciona, siguiente paso: eliminar dependencia de Supabase por completo (desactivar `supabase_upsert` y `supabase_select_all`), usar solo JSONL
+
 ## Datos críticos
 - Rama: `main` (obligatorio para HF Spaces)
 - HF Space: `KelvinMz/VesArbitrajeP2P`
-- Health check: puerto 7860
+- Health check: puerto 7860, texto plano (`text/plain "OK"`)
 - No usar `python-telegram-bot` ni `httpx` (fallan en HF con `ConnectError`)
 - `getUpdates` usa POST con JSON (timeout=10)
 - Output unbuffered forzado (`PYTHONUNBUFFERED=1`, `python -u`)
