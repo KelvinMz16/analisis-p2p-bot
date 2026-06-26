@@ -474,18 +474,6 @@ DEX_NETWORKS = {
 _COINGECKO_CACHE = {"data": None, "ts": 0}
 
 
-BINANCE_SYMBOLS = {
-    "SOL": "SOLUSDT",
-    "POL": "POLUSDT",
-    "BNB": "BNBUSDT",
-    "BTC": "BTCUSDT",
-    "ETH": "ETHUSDT",
-    "USDC": "USDCUSDT",
-}
-
-_BINANCE_CACHE = {"data": None, "ts": 0}
-
-
 def _fetch_spot_single(network_key):
     """Fallback individual si el batch falla."""
     cfg = DEX_NETWORKS.get(network_key)
@@ -524,44 +512,16 @@ def _fetch_all_spot_prices():
         return _COINGECKO_CACHE["data"] or {}
 
 
-def _fetch_all_binance_prices():
-    ahora = time.time()
-    if _BINANCE_CACHE["data"] and (ahora - _BINANCE_CACHE["ts"]) < 10:
-        return _BINANCE_CACHE["data"]
-    symbols = list(BINANCE_SYMBOLS.values())
-    url = f"{_PROXY_HTTP}/binance-api/api/v3/ticker/price"
-    try:
-        resp = requests.get(url, params={"symbols": json.dumps(symbols)}, headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        result = {}
-        for item in data:
-            result[item["symbol"]] = float(item["price"])
-        _BINANCE_CACHE["data"] = result
-        _BINANCE_CACHE["ts"] = ahora
-        return result
-    except Exception as e:
-        print(f"[Binance/Proxy] Error: {e}", flush=True)
-        return _BINANCE_CACHE["data"] or {}
-
-
 def obtener_precio_spot(network_key):
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
-    symbol = BINANCE_SYMBOLS.get(network_key)
-    if symbol:
-        binance_data = _fetch_all_binance_prices()
-        price = binance_data.get(symbol, 0)
-        if price and price > 0:
-            print(f"  [Spot/{network_key}] Binance: ${price:.4f}", flush=True)
-            return price
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
         print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
         return price
-    time.sleep(0.5)
+    time.sleep(1.5)
     price = _fetch_spot_single(network_key)
     if price and price > 0:
         return price
