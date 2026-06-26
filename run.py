@@ -1,29 +1,36 @@
-import subprocess, sys, threading, socket, time
+import subprocess
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-def _hc(c):
-    try:
-        c.recv(1024)
-        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK")
-    except: pass
-    finally:
-        try: c.close()
-        except: pass
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
 
-def _hs(port):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        # Suppress logging to avoid cluttering Space logs
+        pass
+
+def start_health_server(port):
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", port))
-        s.listen(10)
+        server = ThreadingHTTPServer(("0.0.0.0", port), HealthCheckHandler)
         print(f"HEALTH_SERVER_PORT:{port}", flush=True)
-        while True:
-            c, _ = s.accept()
-            threading.Thread(target=_hc, args=(c,), daemon=True).start()
+        server.serve_forever()
     except Exception as e:
         print(f"HEALTH_SERVER_ERROR_PORT:{port}:{e}", flush=True)
 
+# Start health servers on both ports in daemon threads
 for p in [8080, 7860]:
-    threading.Thread(target=_hs, args=(p,), daemon=True).start()
+    threading.Thread(target=start_health_server, args=(p,), daemon=True).start()
 
 print("RUN: health servers started", flush=True)
 
@@ -32,3 +39,4 @@ while True:
     r = subprocess.call([sys.executable, "-u", "bot_p2p.py"])
     print(f"RUN: bot_p2p.py EXIT_CODE={r} - restarting in 5s", flush=True)
     time.sleep(5)
+
