@@ -72,7 +72,7 @@ class StatusPageHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        pass  # Suppress access logs to keep output clean
+        print(f"HEALTHCHECK: {format % args}", flush=True)  # Log every health check so we see them in logs
 
 def start_health_server(port):
     try:
@@ -84,6 +84,7 @@ def start_health_server(port):
 
 # Start health/status server on port 7860 in a daemon thread
 threading.Thread(target=start_health_server, args=(7860,), daemon=True).start()
+time.sleep(1.0)  # Give the health server time to bind before main loop starts
 bot_status["started"] = datetime.now(timezone.utc)
 
 print("RUN: status page server started on port 7860", flush=True)
