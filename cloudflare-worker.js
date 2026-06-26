@@ -25,7 +25,7 @@ async function handleRequest(request) {
   // Binance API proxy
   if (path.startsWith('/binance-api/')) {
     const subpath = path.split('/binance-api/')[1]
-    const apiUrl = `https://api.binance.com/${subpath}`
+    const apiUrl = `https://api.binance.com/${subpath}${url.search}`
     const resp = await fetch(apiUrl, {
       method: request.method,
       headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -40,7 +40,7 @@ async function handleRequest(request) {
   // Bybit API proxy (backup)
   if (path.startsWith('/bybit-api/')) {
     const subpath = path.split('/bybit-api/')[1]
-    const apiUrl = `https://api.bybit.com/${subpath}`
+    const apiUrl = `https://api.bybit.com/${subpath}${url.search}`
     const resp = await fetch(apiUrl, {
       method: request.method,
       headers: { 'User-Agent': 'Mozilla/5.0' },

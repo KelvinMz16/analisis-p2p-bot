@@ -529,10 +529,9 @@ def _fetch_all_binance_prices():
     if _BINANCE_CACHE["data"] and (ahora - _BINANCE_CACHE["ts"]) < 10:
         return _BINANCE_CACHE["data"]
     symbols = list(BINANCE_SYMBOLS.values())
-    symbols_str = '["' + '","'.join(symbols) + '"]'
-    url = f"{_PROXY_HTTP}/binance-api/api/v3/ticker/price?symbols={symbols_str}"
+    url = f"{_PROXY_HTTP}/binance-api/api/v3/ticker/price"
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, params={"symbols": json.dumps(symbols)}, headers=HEADERS, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         result = {}
