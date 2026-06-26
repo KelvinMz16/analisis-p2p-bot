@@ -48,7 +48,7 @@ def supabase_upsert(record):
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
-    resp = requests.post(url, json=record, headers=headers, timeout=10)
+    resp = requests.post(url, json=record, headers=headers, timeout=(5, 5))
     try:
         resp.raise_for_status()
     except Exception as e:
@@ -67,7 +67,7 @@ def supabase_select_all():
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
     }
-    resp = requests.get(url, headers=headers, timeout=10)
+    resp = requests.get(url, headers=headers, timeout=(5, 5))
     try:
         resp.raise_for_status()
     except Exception as e:
@@ -1529,7 +1529,11 @@ def loop_monitoreo():
                 for r in mejores:
                     registro[r["asset"]] = {"compra": r["compra"], "venta": r["venta"], "margen": r["margen"]}
                 try:
-                    supabase_upsert(registro)
+                    t = threading.Thread(target=supabase_upsert, args=(registro,), daemon=True)
+                    t.start()
+                    t.join(6)
+                    if t.is_alive():
+                        print("Supabase upsert timeout - skipping", flush=True)
                 except Exception as e:
                     print(f"Error guardando en Supabase: {e}", flush=True)
                 try:
