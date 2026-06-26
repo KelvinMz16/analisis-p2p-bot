@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-config_usuario.json
-historial_precios.jsonl
-*.session
-*.session-journal
-sessions/
