@@ -3,5 +3,5 @@ __pycache__/
 config_usuario.json
 historial_precios.jsonl
 *.session
-*.session-journal
 sessions/
+.env
