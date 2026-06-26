@@ -54,29 +54,21 @@ def get_uptime():
         return f"{hours}h {minutes}m {seconds}s"
     return f"{minutes}m {seconds}s"
 
-class StatusPageHandler(BaseHTTPRequestHandler):
+class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        started_str = bot_status["started"].strftime("%Y-%m-%d %H:%M UTC") if bot_status["started"] else "..."
-        uptime_str = get_uptime()
-        estado = "Monitoreando" if bot_status["running"] else "Iniciando..."
-        html = HTML_TEMPLATE % (started_str, uptime_str, bot_status["restarts"], estado)
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(html.encode())))
+        self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(html.encode())
-
+        self.wfile.write(b"OK")
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-
     def log_message(self, format, *args):
-        print(f"HEALTHCHECK: {format % args}", flush=True)  # Log every health check so we see them in logs
+        pass
 
 def start_health_server(port):
     try:
-        server = ThreadingHTTPServer(("0.0.0.0", port), StatusPageHandler)
+        server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
         print(f"HEALTH_SERVER: Listening on port {port}", flush=True)
         server.serve_forever()
     except Exception as e:
@@ -87,7 +79,7 @@ threading.Thread(target=start_health_server, args=(7860,), daemon=True).start()
 time.sleep(1.0)  # Give the health server time to bind before main loop starts
 bot_status["started"] = datetime.now(timezone.utc)
 
-print("RUN: status page server started on port 7860", flush=True)
+print("RUN: health server started on port 7860", flush=True)
 
 while True:
     try:

@@ -1489,13 +1489,7 @@ def loop_monitoreo():
     ciclo = 0
     while True:
         try:
-            try:
-                with open("/proc/meminfo") as _f:
-                    _m = _f.read().split("\n")
-                    _total = [l for l in _m if "MemTotal" in l][0].split()[1]
-                    _avail = [l for l in _m if "MemAvailable" in l][0].split()[1]
-                    print(f"MEM: {_total}KB total, {_avail}KB available", flush=True)
-            except: pass
+
             activo = en_horario()
 
             # Notificar vencimiento VPS 5 dias antes
