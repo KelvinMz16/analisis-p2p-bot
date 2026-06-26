@@ -9,6 +9,7 @@ import urllib.error
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
+import traceback
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ============================================================
@@ -1722,22 +1723,28 @@ def loop_monitoreo():
 
 
 if __name__ == "__main__":
-    print("=" * 60, flush=True)
-    print("  Bot P2P Binance - Venezuela", flush=True)
-    print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
-    print("=" * 60, flush=True)
+    try:
+        print("=" * 60, flush=True)
+        print("  Bot P2P Binance - Venezuela", flush=True)
+        print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
+        print("=" * 60, flush=True)
 
-    threading.Thread(target=guardar_config_local, daemon=True).start()
+        threading.Thread(target=guardar_config_local, daemon=True).start()
 
-    if TELEGRAM_TOKEN:
-        threading.Thread(target=polling_telegram, daemon=True).start()
-        threading.Thread(target=_loop_bcv_scrape, daemon=True).start()
-        time.sleep(2)
-        extra = ""
-        if not en_horario():
-            extra = " (modo silencioso)"
-        print(f"Iniciando monitor{extra}...", flush=True)
-        loop_monitoreo()
-    else:
-        print("Telegram token no configurado. Solo modo monitor", flush=True)
-        loop_monitoreo()
+        if TELEGRAM_TOKEN:
+            threading.Thread(target=polling_telegram, daemon=True).start()
+            threading.Thread(target=_loop_bcv_scrape, daemon=True).start()
+            time.sleep(2)
+            extra = ""
+            if not en_horario():
+                extra = " (modo silencioso)"
+            print(f"Iniciando monitor{extra}...", flush=True)
+            loop_monitoreo()
+        else:
+            print("Telegram token no configurado. Solo modo monitor", flush=True)
+            loop_monitoreo()
+    except Exception as e:
+        import traceback
+        print(f"FATAL: {e}", flush=True)
+        traceback.print_exc()
+        time.sleep(120)
