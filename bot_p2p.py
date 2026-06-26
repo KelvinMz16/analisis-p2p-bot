@@ -15,10 +15,8 @@ def _safe_int(v, d):
     try: return int(v)
     except: return d
 
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-NAMESPACE = "KelvinMz/VesArbitrajeP2P"
-
 # Supabase configuration (read from HF Secrets / environment variables)
+SUPABASE_CONFIG_TABLE = "bot_config"
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "historical_prices")
@@ -76,10 +74,48 @@ def supabase_select_all():
     return resp.json()
 
 
+def supabase_load_config():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CONFIG_TABLE}?id=eq.1&select=config"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=(5, 5))
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows and "config" in rows[0]:
+            return rows[0]["config"]
+        return {}
+    except Exception as e:
+        print(f"[Supabase] Error loading config: {e}", flush=True)
+        return {}
+
+
+def supabase_save_config(config_dict):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CONFIG_TABLE}?on_conflict=id"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+    try:
+        resp = requests.post(url, json={"id": 1, "config": config_dict}, headers=headers, timeout=(5, 5))
+        if resp.status_code not in (200, 201):
+            print(f"[Supabase] Save config returned {resp.status_code}", flush=True)
+    except Exception as e:
+        print(f"[Supabase] Error saving config: {e}", flush=True)
+
+
 CONFIG_PATH = "config_usuario.json"
 
 
 def cargar_config_local():
+    sb = supabase_load_config()
+    if sb:
+        return sb
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
@@ -127,27 +163,19 @@ def nombre_filtro(valor=None):
     return f"{v} Bs"
 
 
-def _sync_hf_secret(key, value):
-    if not HF_TOKEN:
-        return
-    try:
-        url = f"https://huggingface.co/api/spaces/{NAMESPACE}/secrets"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"}
-        requests.post(url, json={"key": key, "value": str(value)}, headers=headers, timeout=10)
-    except Exception as e:
-        print(f"Error sync secret {key}: {e}", flush=True)
-
-
 def guardar_config_local():
     try:
         with open(CONFIG_PATH, "w") as f:
             json.dump(CONFIG, f)
-        _sync_hf_secret("CAPITAL", str(CONFIG["capital"]))
-        _sync_hf_secret("UMBRAL", str(CONFIG["margen_objetivo"]))
-        _sync_hf_secret("MONTO_FILTRO", str(CONFIG["monto_filtro"]))
-        _sync_hf_secret("DEFAULT_CRYPTO", str(CONFIG["default_crypto"]))
+        config_dict = {
+            "capital": CONFIG.get("capital", 100),
+            "margen_objetivo": CONFIG.get("margen_objetivo", 0.8),
+            "monto_filtro": CONFIG.get("monto_filtro", 0),
+            "default_crypto": CONFIG.get("default_crypto", "USDT"),
+        }
+        supabase_save_config(config_dict)
     except Exception as e:
-        print(f"Error guardando config local: {e}", flush=True)
+        print(f"Error guardando config: {e}", flush=True)
 
 
 def guardar_capital():
