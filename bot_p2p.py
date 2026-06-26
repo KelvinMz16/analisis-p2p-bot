@@ -9,7 +9,7 @@ import urllib.error
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
-import traceback
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ============================================================
 # CONFIGURACION (persistente via HF Secrets)
@@ -429,92 +429,48 @@ DEX_NETWORKS = {
 }
 
 
-# Mapeo de coingecko_id → símbolo Bybit
-_CG_TO_BYBIT = {
-    "solana": "SOLUSDT",
-    "polygon-ecosystem-token": "POLUSDT",
-    "binancecoin": "BNBUSDT",
-}
-_BYBIT_CACHE = {"data": None, "ts": 0}
+_COINGECKO_CACHE = {"data": None, "ts": 0}
 
 
-def _bybit_url(path):
-    """Usa proxy Cloudflare si está disponible, sino directo a Bybit."""
-    if USE_PROXY and CLOUDFLARE_PROXY:
-        return f"{CLOUDFLARE_PROXY}/bybit-api/{path}"
-    return f"https://api.bybit.com/{path}"
-
-
-def _request_with_timeout(url, timeout=10):
-    """GET con hard timeout (incluye DNS). Retorna response o None."""
-    import queue
-    q = queue.Queue()
-    def _do():
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=min(timeout, 8))
-            r.raise_for_status()
-            q.put(r)
-        except Exception as e:
-            q.put(e)
-    t = threading.Thread(target=_do, daemon=True)
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
-        return None
-    result = q.get()
-    if isinstance(result, Exception):
-        return None
-    return result
-
-
-def _fetch_bybit_batch():
-    """Batch vía worker proxy solamente."""
-    wanted = set(_CG_TO_BYBIT.values())
-    resp = _request_with_timeout(_bybit_url("v5/market/tickers?category=spot"))
-    if not resp:
-        return None
-    try:
-        data = {}
-        for item in resp.json().get("result", {}).get("list", []):
-            sym = item.get("symbol")
-            if sym in wanted:
-                for cg_id, s in _CG_TO_BYBIT.items():
-                    if s == sym:
-                        data[cg_id] = {"usd": float(item.get("lastPrice", 0))}
-                        break
-        return data
-    except Exception:
-        return None
+_COINGECKO_CACHE = {"data": None, "ts": 0}
 
 
 def _fetch_spot_single(network_key):
-    """Individual vía worker proxy."""
+    """Fallback individual si el batch falla."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
-    symbol = _CG_TO_BYBIT.get(cfg["coingecko_id"])
-    if not symbol:
-        return None
-    resp = _request_with_timeout(_bybit_url(f"v5/market/tickers?category=spot&symbol={symbol}"))
-    if not resp:
-        return None
-    items = resp.json().get("result", {}).get("list", [])
-    if items:
-        return float(items[0].get("lastPrice", 0))
+    try:
+        resp = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd",
+            headers=HEADERS, timeout=5
+        )
+        resp.raise_for_status()
+        return float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
+    except Exception as e:
+        print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
     return None
 
 
 def _fetch_all_spot_prices():
-    """Batch vía worker proxy, cacheado 10s."""
+    """Batch todos los assets en una llamada, cacheado 10s."""
     ahora = time.time()
-    if _BYBIT_CACHE["data"] is not None and (ahora - _BYBIT_CACHE["ts"]) < 10:
-        return _BYBIT_CACHE["data"]
-    data = _fetch_bybit_batch()
-    _BYBIT_CACHE["data"] = data or {}
-    _BYBIT_CACHE["ts"] = ahora
-    if data:
-        print("  [Spot] Fuente: Worker proxy", flush=True)
-    return _BYBIT_CACHE["data"]
+    if _COINGECKO_CACHE["data"] and (ahora - _COINGECKO_CACHE["ts"]) < 10:
+        return _COINGECKO_CACHE["data"]
+    ids = ",".join(cfg["coingecko_id"] for nk, cfg in DEX_NETWORKS.items() if cfg.get("coingecko_id"))
+    try:
+        resp = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
+            headers=HEADERS, timeout=5
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _COINGECKO_CACHE["data"] = data
+        _COINGECKO_CACHE["ts"] = ahora
+        return data
+    except Exception as e:
+        print(f"[CoinGecko/batch] Error: {e}", flush=True)
+        return _COINGECKO_CACHE["data"] or {}
 
 
 def obtener_precio_spot(network_key):
@@ -524,12 +480,12 @@ def obtener_precio_spot(network_key):
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
-        print(f"  [Spot/{network_key}] ${price:.4f}", flush=True)
+        print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
         return price
+    # Fallback individual si batch no tenia el precio (429 parcial)
     time.sleep(0.5)
     price = _fetch_spot_single(network_key)
     if price and price > 0:
-        print(f"  [Spot/{network_key}] ${price:.4f} (single)", flush=True)
         return price
     print(f"  [Spot/{network_key}] Sin precio disponible", flush=True)
     return None
@@ -1305,30 +1261,24 @@ def polling_telegram():
 # ============================================================
 # HEALTH SERVER (requerido por Hugging Face Spaces)
 # ============================================================
-import socket
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status": "running"}')
+    def log_message(self, *a):
+        pass
 
-def _run_health(port):
+def _run_health_server():
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", port))
-        s.listen(5)
-        print(f"Health server listo en puerto {port}", flush=True)
-        while True:
-            conn, addr = s.accept()
-            try:
-                conn.recv(1024)
-                conn.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
-            except:
-                pass
-            finally:
-                conn.close()
+        server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
+        print("Health server iniciado en 0.0.0.0:8080", flush=True)
+        server.serve_forever()
     except Exception as e:
-        print(f"Health server puerto {port} error: {e}", flush=True)
+        print(f"Health server error: {e}", flush=True)
 
-threading.Thread(target=_run_health, args=(8080,), daemon=True).start()
-threading.Thread(target=_run_health, args=(7860,), daemon=True).start()
-time.sleep(0.5)
+threading.Thread(target=_run_health_server, daemon=True).start()
 # ============================================================
 
 
@@ -1755,28 +1705,22 @@ def loop_monitoreo():
 
 
 if __name__ == "__main__":
-    try:
-        print("=" * 60, flush=True)
-        print("  Bot P2P Binance - Venezuela", flush=True)
-        print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
-        print("=" * 60, flush=True)
+    print("=" * 60, flush=True)
+    print("  Bot P2P Binance - Venezuela", flush=True)
+    print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
+    print("=" * 60, flush=True)
 
-        threading.Thread(target=guardar_config_local, daemon=True).start()
+    guardar_config_local()
 
-        if TELEGRAM_TOKEN:
-            threading.Thread(target=polling_telegram, daemon=True).start()
-            threading.Thread(target=_loop_bcv_scrape, daemon=True).start()
-            time.sleep(2)
-            extra = ""
-            if not en_horario():
-                extra = " (modo silencioso)"
-            print(f"Iniciando monitor{extra}...", flush=True)
-            loop_monitoreo()
-        else:
-            print("Telegram token no configurado. Solo modo monitor", flush=True)
-            loop_monitoreo()
-    except Exception as e:
-        import traceback
-        print(f"FATAL: {e}", flush=True)
-        traceback.print_exc()
-        time.sleep(120)
+    if TELEGRAM_TOKEN:
+        threading.Thread(target=polling_telegram, daemon=True).start()
+        threading.Thread(target=_loop_bcv_scrape, daemon=True).start()
+        time.sleep(2)
+        extra = ""
+        if not en_horario():
+            extra = " (modo silencioso)"
+        print(f"Iniciando monitor{extra}...", flush=True)
+        loop_monitoreo()
+    else:
+        print("Telegram token no configurado. Solo modo monitor", flush=True)
+        loop_monitoreo()
