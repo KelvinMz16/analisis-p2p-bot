@@ -539,17 +539,16 @@ def _fetch_spot_single(network_key):
 def _fetch_all_spot_prices():
     """Batch con fallback: Bybit → CoinGecko, cacheado 10s."""
     ahora = time.time()
-    if _BYBIT_CACHE["data"] and (ahora - _BYBIT_CACHE["ts"]) < 10:
+    if _BYBIT_CACHE["data"] is not None and (ahora - _BYBIT_CACHE["ts"]) < 10:
         return _BYBIT_CACHE["data"]
     data = _fetch_bybit_batch()
     source = "Bybit"
     if not data:
         data = _fetch_coingecko_batch()
-        source = "CoinGecko" if data else "None"
+        source = "CoinGecko" if data else "Ninguna"
     _BYBIT_CACHE["data"] = data or {}
     _BYBIT_CACHE["ts"] = ahora
-    if data:
-        print(f"  [Spot] Fuente: {source}", flush=True)
+    print(f"  [Spot] Fuente: {source}", flush=True)
     return _BYBIT_CACHE["data"]
 
 
