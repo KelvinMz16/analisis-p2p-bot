@@ -11,4 +11,6 @@ COPY bot_p2p.py health.py .
 
 EXPOSE 7860
 
-CMD python -u health.py & exec python -u bot_p2p.py
+COPY start.sh .
+
+CMD sh start.sh
