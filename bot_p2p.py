@@ -242,7 +242,7 @@ def _get_session():
     if _session is None:
         from requests.adapters import HTTPAdapter
         _session = requests.Session()
-        adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=1)
+        adapter = HTTPAdapter(pool_connections=2, pool_maxsize=2, max_retries=1)
         _session.mount("http://", adapter)
         _session.mount("https://", adapter)
     return _session
@@ -1489,6 +1489,13 @@ def loop_monitoreo():
     ciclo = 0
     while True:
         try:
+            try:
+                with open("/proc/meminfo") as _f:
+                    _m = _f.read().split("\n")
+                    _total = [l for l in _m if "MemTotal" in l][0].split()[1]
+                    _avail = [l for l in _m if "MemAvailable" in l][0].split()[1]
+                    print(f"MEM: {_total}KB total, {_avail}KB available", flush=True)
+            except: pass
             activo = en_horario()
 
             # Notificar vencimiento VPS 5 dias antes

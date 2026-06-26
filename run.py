@@ -89,8 +89,17 @@ bot_status["started"] = datetime.now(timezone.utc)
 
 print("RUN: status page server started on port 7860", flush=True)
 
-# DO NOT run bot_p2p.py - diagnostic: keepalive only
-print("RUN: DIAGNOSTIC MODE - health server only, no bot", flush=True)
 while True:
-    time.sleep(60)
+    try:
+        bot_status["running"] = True
+        print("RUN: starting bot_p2p.py", flush=True)
+        r = subprocess.call([sys.executable, "-u", "bot_p2p.py"])
+        bot_status["running"] = False
+        bot_status["restarts"] += 1
+        bot_status["last_restart"] = datetime.now(timezone.utc)
+        print(f"RUN: bot_p2p.py EXIT_CODE={r} - restarting in 5s", flush=True)
+        time.sleep(5)
+    except Exception as e:
+        print(f"RUN: WHILE_LOOP_CRASH: {e}", flush=True)
+        time.sleep(5)
 
