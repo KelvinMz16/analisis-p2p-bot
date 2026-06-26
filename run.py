@@ -15,26 +15,28 @@ class H(BaseHTTPRequestHandler):
 server = HTTPServer(("0.0.0.0", PORT), H)
 print(f"SERVER: listening on port {PORT}", flush=True)
 
-def step1():
+def step2():
     try:
-        print("STEP1: import bot_p2p", flush=True)
+        print("STEP2: import bot_p2p", flush=True)
         import bot_p2p
-        print("STEP1: OK", flush=True)
         
-        print("STEP1: llamando obtener_precio_p2p(BUY, USDT)", flush=True)
-        precio = bot_p2p.obtener_precio_p2p("BUY", "USDT")
-        print(f"STEP1: USDT/BUY = {precio}", flush=True)
+        print("STEP2: guardar_config_local", flush=True)
+        bot_p2p.guardar_config_local()
+        print("STEP2: OK", flush=True)
         
-        print("STEP1: llamando obtener_precio_p2p(SELL, USDT)", flush=True)
-        precio = bot_p2p.obtener_precio_p2p("SELL", "USDT")
-        print(f"STEP1: USDT/SELL = {precio}", flush=True)
+        print("STEP2: calcular_margen para 6 assets", flush=True)
+        for asset in ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]:
+            r = bot_p2p.calcular_margen(asset)
+            if r:
+                print(f"  {asset}: compra={r['compra']:.2f} venta={r['venta']:.2f} margen={r['margen']:+.2f}%", flush=True)
+            time.sleep(0.3)
         
-        print("STEP1: completo, esperando...", flush=True)
+        print("STEP2: completo, esperando...", flush=True)
     except Exception as e:
-        print(f"STEP1 ERROR: {e}", flush=True)
+        print(f"STEP2 ERROR: {e}", flush=True)
         import traceback
         traceback.print_exc()
 
-threading.Thread(target=step1, daemon=True).start()
+threading.Thread(target=step2, daemon=True).start()
 print("SERVE: starting", flush=True)
 server.serve_forever()
