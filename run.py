@@ -13,9 +13,7 @@ class H(BaseHTTPRequestHandler):
 def test():
     print("A: import bot_p2p", flush=True)
     import bot_p2p
-    print("B: guardar_config_local", flush=True)
-    bot_p2p.guardar_config_local()
-    print("C: thread vivo", flush=True)
+    print("B: thread vivo", flush=True)
     while True:
         time.sleep(60)
 
