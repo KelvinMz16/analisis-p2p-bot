@@ -491,11 +491,20 @@ def obtener_precio_spot(network_key):
     return None
 
 
+# Rangos de precio para filtrar pares falsos en DexScreener
+PRICE_RANGES = {
+    "SOL": (50, 300),     # SOL tipico $60-200
+    "POL": (0.01, 3),     # POL tipico $0.02-1
+    "BNB": (200, 1500),   # BNB tipico $300-800
+}
+
+
 def obtener_precio_dex(network_key):
-    """Precio DEX vía DexScreener (única fuente DEX que funciona desde HF)."""
+    """Precio DEX vía DexScreener, filtrando pares con precio fuera de rango."""
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg:
         return None
+    min_p, max_p = PRICE_RANGES.get(network_key, (0, float("inf")))
     url = f"https://api.dexscreener.com/latest/dex/tokens/{cfg['token_address']}"
     try:
         resp = requests.get(url, headers=HEADERS, timeout=5)
@@ -504,13 +513,21 @@ def obtener_precio_dex(network_key):
         best_price = None
         best_liq = 0
         for p in pairs:
-            if p.get("chainId") == cfg["chain_id"] and p.get("quoteToken", {}).get("symbol") in ["USDC", "USDT"]:
-                liq_raw = p.get("liquidity", {})
-                liq = float(liq_raw.get("usd", 0)) if isinstance(liq_raw, dict) else 0
-                price_str = p.get("priceUsd")
-                if price_str and liq > best_liq:
-                    best_price = float(price_str)
-                    best_liq = liq
+            if p.get("chainId") != cfg["chain_id"]:
+                continue
+            if p.get("quoteToken", {}).get("symbol") not in ["USDC", "USDT"]:
+                continue
+            price_str = p.get("priceUsd")
+            if not price_str:
+                continue
+            price = float(price_str)
+            if not (min_p <= price <= max_p):
+                continue
+            liq_raw = p.get("liquidity", {})
+            liq = float(liq_raw.get("usd", 0)) if isinstance(liq_raw, dict) else 0
+            if liq > best_liq:
+                best_price = price
+                best_liq = liq
         if best_price:
             print(f"  [DEX/{network_key}] DexScreener most-liquid: ${best_price:.4f} (liq: ${best_liq:.0f})", flush=True)
             return best_price
