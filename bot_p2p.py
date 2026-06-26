@@ -55,10 +55,26 @@ def supabase_upsert(record):
     except Exception:
         return None
 
+
+RETENTION_DAYS = 7
+
+
+def supabase_cleanup():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    until = (datetime.now(VENEZUELA_TZ) - timedelta(days=RETENTION_DAYS)).isoformat()
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?ts=lt.{until}"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    try:
+        resp = requests.delete(url, headers=headers, timeout=(5, 5))
+        print(f"[Supabase] Cleanup status={resp.status_code} deleted={len(resp.text) if resp.status_code==200 else '?'}", flush=True)
+    except Exception as e:
+        print(f"[Supabase] Cleanup error: {e}", flush=True)
+
 def supabase_select_all():
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase credentials not set in environment")
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc"
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc&limit=10000"
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -1582,6 +1598,7 @@ def loop_monitoreo():
                         f.write(json.dumps(registro) + "\n")
                 except Exception as e:
                     print(f"Error guardando JSONL: {e}", flush=True)
+                supabase_cleanup()
 
             if not activo:
                 time.sleep(60)
