@@ -18,8 +18,8 @@ def _health_server():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", 8888))
-        s.listen(20)
+        s.bind(("0.0.0.0", 7860))
+        s.listen(5)
         while True:
             conn, _ = s.accept()
             try:
@@ -28,10 +28,8 @@ def _health_server():
             except:
                 pass
             finally:
-                try:
-                    conn.close()
-                except:
-                    pass
+                try: conn.close()
+                except: pass
     except:
         pass
 
@@ -41,6 +39,13 @@ threading.Thread(target=_health_server, daemon=True).start()
 # ============================================================
 # CONFIGURACION (persistente via HF Secrets)
 # ============================================================
+def _safe_float(v, d):
+    try: return float(v)
+    except: return d
+def _safe_int(v, d):
+    try: return int(v)
+    except: return d
+
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 NAMESPACE = "KelvinMz/VesArbitrajeP2P"
 
