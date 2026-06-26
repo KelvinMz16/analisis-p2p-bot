@@ -47,7 +47,7 @@ def supabase_upsert(record):
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
-    resp = requests.post(url, json=record, headers=headers)
+    resp = requests.post(url, json=record, headers=headers, timeout=10)
     try:
         resp.raise_for_status()
     except Exception as e:
@@ -66,7 +66,7 @@ def supabase_select_all():
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
     }
-    resp = requests.get(url, headers=headers)
+    resp = requests.get(url, headers=headers, timeout=10)
     try:
         resp.raise_for_status()
     except Exception as e:
@@ -445,56 +445,39 @@ def _bybit_url(path):
     return f"https://api.bybit.com/{path}"
 
 
-def _try_bybit(url, timeout=5):
-    """Intenta GET a URL, retorna response si ok, None si falla."""
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=timeout)
-        resp.raise_for_status()
-        return resp
-    except Exception:
+def _request_with_timeout(url, timeout=8):
+    """GET con hard timeout (incluye DNS). Retorna response o None."""
+    import queue
+    q = queue.Queue()
+    def _do():
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=min(timeout, 6))
+            r.raise_for_status()
+            q.put(r)
+        except Exception as e:
+            q.put(e)
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        return None  # timeout (DNS colgado etc.)
+    result = q.get()
+    if isinstance(result, Exception):
         return None
+    return result
 
 
-def _fetch_spot_single(network_key):
-    """Fallback individual si el batch falla."""
-    cfg = DEX_NETWORKS.get(network_key)
-    if not cfg or not cfg.get("coingecko_id"):
-        return None
-    symbol = _CG_TO_BYBIT.get(cfg["coingecko_id"])
-    if not symbol:
-        return None
-    path = f"v5/market/tickers?category=spot&symbol={symbol}"
-    proxy_url = _bybit_url(path)
-    direct_url = f"https://api.bybit.com/{path}"
-    # intentar proxy primero, fallback directo
-    for label, url in [("proxy", proxy_url), ("directo", direct_url)]:
-        if label == "directo" and url == proxy_url:
-            continue  # mismo URL, saltar
-        resp = _try_bybit(url)
-        if resp:
-            items = resp.json().get("result", {}).get("list", [])
-            if items:
-                return float(items[0].get("lastPrice", 0))
-    print(f"[Bybit/{network_key}] Sin precio disponible", flush=True)
-    return None
-
-
-def _fetch_all_spot_prices():
-    """Batch vía Bybit (filtra 3 símbolos), cacheado 10s."""
-    ahora = time.time()
-    if _BYBIT_CACHE["data"] and (ahora - _BYBIT_CACHE["ts"]) < 10:
-        return _BYBIT_CACHE["data"]
+def _fetch_bybit_batch():
+    """Intenta Bybit batch vía proxy primero, luego directo."""
     wanted = set(_CG_TO_BYBIT.values())
-    path = "v5/market/tickers?category=spot"
-    proxy_url = _bybit_url(path)
-    direct_url = f"https://api.bybit.com/{path}"
-    data = {}
-    for label, url in [("proxy", proxy_url), ("directo", direct_url)]:
-        if label == "directo" and url == proxy_url:
+    for url in [_bybit_url("v5/market/tickers?category=spot"),
+                f"https://api.bybit.com/v5/market/tickers?category=spot"]:
+        if url.startswith("https://api.bybit.com/") and url == _bybit_url("v5/market/tickers?category=spot"):
             continue
-        resp = _try_bybit(url)
+        resp = _request_with_timeout(url)
         if resp:
             try:
+                data = {}
                 for item in resp.json().get("result", {}).get("list", []):
                     sym = item.get("symbol")
                     if sym in wanted:
@@ -503,12 +486,71 @@ def _fetch_all_spot_prices():
                                 data[cg_id] = {"usd": float(item.get("lastPrice", 0))}
                                 break
                 if data:
-                    break
+                    return data
             except Exception:
                 continue
-    _BYBIT_CACHE["data"] = data
+    return None
+
+
+def _fetch_coingecko_batch():
+    """Fallback: batch vía CoinGecko."""
+    ids = ",".join(cfg["coingecko_id"] for nk, cfg in DEX_NETWORKS.items() if cfg.get("coingecko_id"))
+    try:
+        resp = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd",
+            headers=HEADERS, timeout=10
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[CoinGecko/fallback] Error: {e}", flush=True)
+    return None
+
+
+def _fetch_spot_single(network_key):
+    """Fallback individual si el batch falla."""
+    cfg = DEX_NETWORKS.get(network_key)
+    if not cfg or not cfg.get("coingecko_id"):
+        return None
+    symbol = _CG_TO_BYBIT.get(cfg["coingecko_id"])
+    if symbol:
+        for url in [_bybit_url(f"v5/market/tickers?category=spot&symbol={symbol}"),
+                    f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={symbol}"]:
+            if url.startswith("https://api.bybit.com/") and url == _bybit_url(f"v5/market/tickers?category=spot&symbol={symbol}"):
+                continue
+            resp = _request_with_timeout(url)
+            if resp:
+                items = resp.json().get("result", {}).get("list", [])
+                if items:
+                    return float(items[0].get("lastPrice", 0))
+    # Fallback CoinGecko individual
+    try:
+        resp = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={cfg['coingecko_id']}&vs_currencies=usd",
+            headers=HEADERS, timeout=10
+        )
+        resp.raise_for_status()
+        return float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
+    except Exception as e:
+        print(f"[Single/{network_key}] Error: {e}", flush=True)
+    return None
+
+
+def _fetch_all_spot_prices():
+    """Batch con fallback: Bybit → CoinGecko, cacheado 10s."""
+    ahora = time.time()
+    if _BYBIT_CACHE["data"] and (ahora - _BYBIT_CACHE["ts"]) < 10:
+        return _BYBIT_CACHE["data"]
+    data = _fetch_bybit_batch()
+    source = "Bybit"
+    if not data:
+        data = _fetch_coingecko_batch()
+        source = "CoinGecko" if data else "None"
+    _BYBIT_CACHE["data"] = data or {}
     _BYBIT_CACHE["ts"] = ahora
-    return data
+    if data:
+        print(f"  [Spot] Fuente: {source}", flush=True)
+    return _BYBIT_CACHE["data"]
 
 
 def obtener_precio_spot(network_key):
@@ -518,11 +560,12 @@ def obtener_precio_spot(network_key):
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
-        print(f"  [Spot/{network_key}] Bybit: ${price:.4f}", flush=True)
+        print(f"  [Spot/{network_key}] ${price:.4f}", flush=True)
         return price
     time.sleep(0.5)
     price = _fetch_spot_single(network_key)
     if price and price > 0:
+        print(f"  [Spot/{network_key}] ${price:.4f} (single)", flush=True)
         return price
     print(f"  [Spot/{network_key}] Sin precio disponible", flush=True)
     return None
