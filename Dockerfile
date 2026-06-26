@@ -9,4 +9,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot_p2p.py run.py .
 
+EXPOSE 7860
+
 CMD ["python", "-u", "run.py"]

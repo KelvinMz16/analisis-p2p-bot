@@ -28,9 +28,8 @@ def start_health_server(port):
     except Exception as e:
         print(f"HEALTH_SERVER_ERROR_PORT:{port}:{e}", flush=True)
 
-# Start health servers on both ports in daemon threads
-for p in [8080, 7860]:
-    threading.Thread(target=start_health_server, args=(p,), daemon=True).start()
+# Start health server on port 7860 in a daemon thread
+threading.Thread(target=start_health_server, args=(7860,), daemon=True).start()
 
 print("RUN: health servers started", flush=True)
 
