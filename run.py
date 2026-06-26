@@ -16,7 +16,6 @@ def run_bot():
     print(f"  Capital: ${bot_p2p.CONFIG['capital']} | Umbral: {bot_p2p.CONFIG['margen_objetivo']}%", flush=True)
     if bot_p2p.TELEGRAM_TOKEN:
         threading.Thread(target=bot_p2p.polling_telegram, daemon=True).start()
-        threading.Thread(target=bot_p2p._loop_bcv_scrape, daemon=True).start()
         time.sleep(2)
         extra = ""
         if not bot_p2p.en_horario():

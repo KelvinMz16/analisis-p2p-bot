@@ -474,7 +474,16 @@ DEX_NETWORKS = {
 _COINGECKO_CACHE = {"data": None, "ts": 0}
 
 
-_COINGECKO_CACHE = {"data": None, "ts": 0}
+_BYBIT_CACHE = {"data": None, "ts": 0}
+
+BYBIT_SYMBOLS = {
+    "SOL": "SOLUSDT",
+    "POL": "POLUSDT",
+    "BNB": "BNBUSDT",
+    "BTC": "BTCUSDT",
+    "ETH": "ETHUSDT",
+    "USDC": "USDCUSDT",
+}
 
 
 def _fetch_spot_single(network_key):
@@ -515,16 +524,51 @@ def _fetch_all_spot_prices():
         return _COINGECKO_CACHE["data"] or {}
 
 
+def _fetch_all_bybit_prices():
+    ahora = time.time()
+    if _BYBIT_CACHE["data"] and (ahora - _BYBIT_CACHE["ts"]) < 10:
+        return _BYBIT_CACHE["data"]
+    symbols = list(BYBIT_SYMBOLS.values())
+    try:
+        result = {}
+        for sym in symbols:
+            resp = requests.get(
+                f"https://api.bybit.com/v5/market/tickers?category=spot&symbol={sym}",
+                headers=HEADERS, timeout=5
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("retCode") == 0:
+                lst = data.get("result", {}).get("list", [])
+                if lst:
+                    result[sym] = float(lst[0].get("lastPrice", 0))
+        _BYBIT_CACHE["data"] = result
+        _BYBIT_CACHE["ts"] = ahora
+        return result
+    except Exception as e:
+        print(f"[Bybit/batch] Error: {e}", flush=True)
+        return _BYBIT_CACHE["data"] or {}
+
+
 def obtener_precio_spot(network_key):
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
+    symbol = BYBIT_SYMBOLS.get(network_key)
+    if symbol:
+        bybit_data = _fetch_all_bybit_prices()
+        price = bybit_data.get(symbol, 0)
+        if price and price > 0:
+            if network_key == "USDC":
+                print(f"  [Spot/{network_key}] Bybit: ${price:.6f}", flush=True)
+            else:
+                print(f"  [Spot/{network_key}] Bybit: ${price:.4f}", flush=True)
+            return price
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
         print(f"  [Spot/{network_key}] CoinGecko: ${price:.4f}", flush=True)
         return price
-    # Fallback individual si batch no tenia el precio (429 parcial)
     time.sleep(0.5)
     price = _fetch_spot_single(network_key)
     if price and price > 0:
@@ -1737,7 +1781,6 @@ if __name__ == "__main__":
 
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
-        threading.Thread(target=_loop_bcv_scrape, daemon=True).start()
         time.sleep(2)
         extra = ""
         if not en_horario():
