@@ -12,9 +12,15 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"status":"ok","uptime":int(time.time()-STARTED)}).encode())
     def log_message(self, *a): pass
 
-# TEST 1: Solo import, sin ejecutar nada
-print("TEST1: importing bot_p2p...", flush=True)
-import bot_p2p
-print("TEST1: import OK, starting server...", flush=True)
+# 1. Crear servidor PRIMERO (socket listening)
+server = HTTPServer(("0.0.0.0", PORT), H)
+print(f"SERVER: listening on port {PORT}", flush=True)
 
-HTTPServer(("0.0.0.0", PORT), H).serve_forever()
+# 2. Importar bot_p2p (conexiones TCP se encolan mientras tanto)
+print("IMPORT: importing bot_p2p...", flush=True)
+import bot_p2p
+print("IMPORT: OK", flush=True)
+
+# 3. Serve forever (acepta conexiones encoladas inmediatamente)
+print("SERVE: starting", flush=True)
+server.serve_forever()
