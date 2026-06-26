@@ -17,8 +17,8 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        # Suppress logging to avoid cluttering Space logs
-        pass
+        # Print logs to stdout to debug health checks
+        print(f"HEALTH_LOG: {format % args}", flush=True)
 
 def start_health_server(port):
     try:
