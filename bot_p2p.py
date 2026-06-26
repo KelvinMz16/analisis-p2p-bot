@@ -10,7 +10,6 @@ from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
 import traceback
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ============================================================
 # CONFIGURACION (persistente via HF Secrets)
@@ -1299,26 +1298,30 @@ def polling_telegram():
 # ============================================================
 # HEALTH SERVER (requerido por Hugging Face Spaces)
 # ============================================================
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"status": "running"}')
-    def log_message(self, *a):
-        pass
+import socket
 
 def _run_health(port):
     try:
-        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", port))
+        s.listen(5)
         print(f"Health server listo en puerto {port}", flush=True)
-        server.serve_forever()
+        while True:
+            conn, addr = s.accept()
+            try:
+                conn.recv(1024)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+            except:
+                pass
+            finally:
+                conn.close()
     except Exception as e:
         print(f"Health server puerto {port} error: {e}", flush=True)
 
 threading.Thread(target=_run_health, args=(8080,), daemon=True).start()
 threading.Thread(target=_run_health, args=(7860,), daemon=True).start()
-time.sleep(0.3)
+time.sleep(0.5)
 # ============================================================
 
 
