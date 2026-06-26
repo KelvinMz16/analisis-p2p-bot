@@ -7,6 +7,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot_p2p.py .
+COPY bot_p2p.py health.py .
 
-CMD ["python", "-u", "bot_p2p.py"]
+EXPOSE 7860
+
+CMD python -u health.py & exec python -u bot_p2p.py

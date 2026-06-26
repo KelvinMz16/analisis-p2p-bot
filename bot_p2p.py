@@ -9,7 +9,7 @@ import urllib.error
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
-from http.server import HTTPServer, BaseHTTPRequestHandler
+
 
 # ============================================================
 # CONFIGURACION (persistente via HF Secrets)
@@ -89,10 +89,23 @@ def cargar_config_local():
 
 
 _config_local = cargar_config_local()
+
+def _safe_float(v, default):
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return default
+
+def _safe_int(v, default):
+    try:
+        return int(v)
+    except (ValueError, TypeError):
+        return default
+
 CONFIG = {
-    "capital": float(_config_local.get("capital", os.getenv("CAPITAL", "100"))),
-    "margen_objetivo": float(_config_local.get("margen_objetivo", os.getenv("UMBRAL", "0.8"))),
-    "monto_filtro": int(_config_local.get("monto_filtro", os.getenv("MONTO_FILTRO", "0"))),
+    "capital": _safe_float(_config_local.get("capital", os.getenv("CAPITAL", "100")), 100),
+    "margen_objetivo": _safe_float(_config_local.get("margen_objetivo", os.getenv("UMBRAL", "0.8")), 0.8),
+    "monto_filtro": _safe_int(_config_local.get("monto_filtro", os.getenv("MONTO_FILTRO", "0")), 0),
     "default_crypto": _config_local.get("default_crypto", os.getenv("DEFAULT_CRYPTO", "USDT")),
 }
 
@@ -1255,53 +1268,6 @@ def polling_telegram():
             elif "message" in update and update["message"].get("text"):
                 procesar_mensaje(update["message"]["text"], update["message"]["chat"]["id"])
         time.sleep(3)
-# ============================================================
-
-
-# ============================================================
-# HEALTH SERVER (requerido por Hugging Face Spaces)
-# ============================================================
-import socket
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"status": "running"}')
-    def log_message(self, *a):
-        pass
-
-def _run_health_server():
-    try:
-        server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
-        print("Health server iniciado en 0.0.0.0:8080", flush=True)
-        server.serve_forever()
-    except Exception as e:
-        print(f"Health server error 8080: {e}", flush=True)
-
-def _run_health_raw(port):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", port))
-        s.listen(5)
-        print(f"Health server raw en puerto {port}", flush=True)
-        while True:
-            conn, addr = s.accept()
-            try:
-                conn.recv(1024)
-                conn.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
-            except:
-                pass
-            finally:
-                conn.close()
-    except Exception as e:
-        print(f"Health server raw puerto {port} error: {e}", flush=True)
-
-threading.Thread(target=_run_health_server, daemon=True).start()
-threading.Thread(target=_run_health_raw, args=(7860,), daemon=True).start()
-time.sleep(0.3)
 # ============================================================
 
 
