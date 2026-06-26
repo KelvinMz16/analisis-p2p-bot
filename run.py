@@ -10,11 +10,13 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
     def log_message(self, *a): pass
 
-# Solo un thread que duerme, SIN import bot_p2p
-def dummy():
+def test():
+    print("TEST: import bot_p2p...", flush=True)
+    import bot_p2p
+    print("TEST: OK", flush=True)
     while True:
         time.sleep(60)
 
-threading.Thread(target=dummy, daemon=True).start()
+threading.Thread(target=test, daemon=True).start()
 print("SERVER: on port " + str(PORT), flush=True)
 HTTPServer(("0.0.0.0", PORT), H).serve_forever()
