@@ -1,44 +1,41 @@
-import json
-import os
-import re
-import ssl as ssl_mod
-import threading
-import time
-import urllib.request
-import urllib.error
 import socket
-from collections import defaultdict
-from datetime import datetime, timezone, timedelta, date
-import requests
+import threading
 
 # ============================================================
-# HEALTH SERVER (primero que todo, antes de cualquier fallo)
+# HEALTH SERVER (PRIMERA LÍNEA EJECUTABLE - Puerto 8080)
 # ============================================================
 def _health_server():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", 7860))
+        s.bind(("0.0.0.0", 8080))
         s.listen(5)
-        print("HEALTH SERVER ACTIVO EN 7860", flush=True)
+        print(">>> HEALTH SERVER LISTENING ON 8080 <<<", flush=True)
         while True:
             conn, _ = s.accept()
             try:
                 conn.recv(1024)
-                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            except:
-                pass
+                conn.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+            except Exception as e:
+                print(f"Health conn error: {e}", flush=True)
             finally:
                 try: conn.close()
                 except: pass
-    except:
-        pass
+    except Exception as e:
+        print(f">>> HEALTH SERVER FATAL ERROR: {e} <<<", flush=True)
 
 threading.Thread(target=_health_server, daemon=True).start()
-# ============================================================
 
 # ============================================================
-# CONFIGURACION (persistente via HF Secrets)
+# RESTO DE IMPORTS (lentos: requests, etc.)
+# ============================================================
+import json, os, re, ssl, time, urllib.request, urllib.error
+from collections import defaultdict
+from datetime import datetime, timezone, timedelta, date
+import requests
+
+# ============================================================
+# CONFIGURACION
 # ============================================================
 def _safe_float(v, d):
     try: return float(v)
