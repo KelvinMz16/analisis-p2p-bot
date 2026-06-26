@@ -1,4 +1,4 @@
-import os, time, json
+import os, time, json, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = int(os.getenv("PORT", 7860))
@@ -12,15 +12,29 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({"status":"ok","uptime":int(time.time()-STARTED)}).encode())
     def log_message(self, *a): pass
 
-# 1. Crear servidor PRIMERO (socket listening)
 server = HTTPServer(("0.0.0.0", PORT), H)
 print(f"SERVER: listening on port {PORT}", flush=True)
 
-# 2. Importar bot_p2p (conexiones TCP se encolan mientras tanto)
 print("IMPORT: importing bot_p2p...", flush=True)
 import bot_p2p
 print("IMPORT: OK", flush=True)
 
-# 3. Serve forever (acepta conexiones encoladas inmediatamente)
+print("STEP: guardar_config_local", flush=True)
+bot_p2p.guardar_config_local()
+print("STEP: config OK", flush=True)
+
+# loop_monitoreo en thread DAEMON
+def run_loop():
+    print("STEP: entering loop_monitoreo (no Telegram threads)", flush=True)
+    try:
+        bot_p2p.loop_monitoreo()
+    except Exception as e:
+        print(f"LOOP DIED: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+
+threading.Thread(target=run_loop, daemon=True).start()
+print("STEP: loop_monitoreo started", flush=True)
+
 print("SERVE: starting", flush=True)
 server.serve_forever()
