@@ -1285,16 +1285,17 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-def _run_health_server():
+def _run_health(port):
     try:
-        server = HTTPServer(("0.0.0.0", 8080), HealthHandler)
-        print("Health server iniciado en 0.0.0.0:8080", flush=True)
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        print(f"Health server listo en puerto {port}", flush=True)
         server.serve_forever()
     except Exception as e:
-        print(f"Health server error: {e}", flush=True)
+        print(f"Health server puerto {port} error: {e}", flush=True)
 
-threading.Thread(target=_run_health_server, daemon=True).start()
-time.sleep(0.5)  # dar tiempo a que el health server bindee el puerto
+threading.Thread(target=_run_health, args=(8080,), daemon=True).start()
+threading.Thread(target=_run_health, args=(7860,), daemon=True).start()
+time.sleep(0.3)
 # ============================================================
 
 
