@@ -1193,15 +1193,28 @@ def procesar_callback(cq):
                     with open(HISTORIAL_PATH, "r") as f:
                         lineas = f.readlines()
             if not lineas:
+                print(f"[Historial] No lineas from Supabase or JSONL", flush=True)
                 editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
                 return
             
             hoy_vet = datetime.now(VENEZUELA_TZ).date()
             lineas_hoy = []
-            for l in lineas:
+            for l in lineas[:5]:
                 try:
                     d = json.loads(l)
-                    dt_ts = datetime.fromisoformat(d["ts"])
+                    ts_raw = d.get("ts", "")
+                    print(f"[Historial] record keys={list(d.keys())} ts={ts_raw}", flush=True)
+                    dt_ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                    if dt_ts.date() == hoy_vet:
+                        lineas_hoy.append(d)
+                except Exception as e:
+                    print(f"[Historial] skip: {e}", flush=True)
+                    continue
+            for l in lineas[5:]:
+                try:
+                    d = json.loads(l)
+                    ts_raw = d.get("ts", "")
+                    dt_ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
                     if dt_ts.date() == hoy_vet:
                         lineas_hoy.append(d)
                 except Exception:
