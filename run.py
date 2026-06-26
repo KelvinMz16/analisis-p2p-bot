@@ -9,7 +9,10 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"status":"ok","uptime":int(time.time()-STARTED)}).encode())
+        try:
+            self.wfile.write(json.dumps({"status":"ok","uptime":int(time.time()-STARTED)}).encode())
+        except:
+            pass
     def log_message(self, *a): pass
 
 server = HTTPServer(("0.0.0.0", PORT), H)
@@ -24,14 +27,16 @@ def step2c():
         bot_p2p.guardar_config_local()
         print("STEP2c: OK, manteniendo thread vivo...", flush=True)
         
-        # Keep thread alive forever
         while True:
             time.sleep(10)
     except Exception as e:
         print(f"STEP2c ERROR: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
 
 threading.Thread(target=step2c, daemon=True).start()
-print("SERVE: starting", flush=True)
-server.serve_forever()
+print("SERVE: starting (with auto-restart)", flush=True)
+while True:
+    try:
+        server.serve_forever()
+    except Exception as e:
+        print(f"SERVE_RESTART: {e}", flush=True)
+        time.sleep(1)
