@@ -1294,6 +1294,7 @@ def _run_health_server():
         print(f"Health server error: {e}", flush=True)
 
 threading.Thread(target=_run_health_server, daemon=True).start()
+time.sleep(0.5)  # dar tiempo a que el health server bindee el puerto
 # ============================================================
 
 
@@ -1725,7 +1726,7 @@ if __name__ == "__main__":
     print(f"  Capital: ${CONFIG['capital']} | Umbral: {CONFIG['margen_objetivo']}%", flush=True)
     print("=" * 60, flush=True)
 
-    guardar_config_local()
+    threading.Thread(target=guardar_config_local, daemon=True).start()
 
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
