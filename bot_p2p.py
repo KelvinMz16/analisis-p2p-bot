@@ -1319,26 +1319,31 @@ def procesar_mensaje(texto, chat_id):
                 ESTADOS_USUARIO.pop(chat_id, None)
                 return
             venta_actual = ULTIMOS.get("USDT", {}).get("venta")
-            puntos = [compra * (1 + p/100) for p in [0.5, 0.8, 1.0, 1.5, 2.0]]
+            cap = CONFIG["capital"]
             be = compra * (1 + COMISION_TOTAL)
             lines = [
                 f"\U0001F9EE *Calculadora P2P*",
-                f"Compra: *{compra:.2f} VES*\n",
-                f"\U0001F4CD *Punto de equilibrio:* *{be:.2f} VES*",
+                f"Compra: *{compra:.2f} VES*",
+                f"Capital: ${cap:.0f} USD\n",
+                f"\U0001F4CD *Punto de equilibrio:* *{be:.2f} VES/USDT*",
                 f"(m\u00ednimo para no perder, comisiones incluidas)\n",
             ]
             if venta_actual:
-                ganancia = venta_actual - be
-                pct = (ganancia / compra) * 100
-                icono = "\u2705" if ganancia > 0 else "\u274C"
+                ganancia_unit = venta_actual - be
+                pct = (ganancia_unit / compra) * 100
+                ganancia_total = ganancia_unit * cap
+                icono = "\u2705" if ganancia_unit > 0 else "\u274C"
                 lines.append(f"{icono} *Venta actual (mercado):* {venta_actual:.2f} VES")
-                lines.append(f"   Ganancia: {ganancia:+.2f} VES ({pct:+.2f}%)")
+                lines.append(f"   Por USDT: {ganancia_unit:+.2f} VES ({pct:+.2f}%)")
+                lines.append(f"   Total x {cap} USD: *{ganancia_total:+.2f} VES* (${ganancia_unit*cap/venta_actual:.2f} USD)")
                 lines.append("")
-            lines.append("*Proyecciones:*")
-            for p in puntos:
-                g = p - be
-                gpct = (g / compra) * 100
-                lines.append(f"   Vender a {p:.2f}: {g:+.2f} VES ({gpct:+.2f}%)")
+            lines.append("*Proyecciones (precio venta → ganancia total):*")
+            for pct_obj in [0.5, 0.8, 1.0, 1.5, 2.0]:
+                pv = compra * (1 + pct_obj/100)
+                g_unit = pv - be
+                g_total = g_unit * cap
+                g_usd = g_total / pv if pv > 0 else 0
+                lines.append(f"   {pv:.2f} → {g_unit:+.2f} VES/USDT | *${g_usd:.2f} USD* ({g_total:+.2f} VES)")
             lines.append(f"\n\u2699 *Comisiones:* {COMISION_TOTAL*100:.2f}% total")
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "Markdown"})
         except ValueError:
