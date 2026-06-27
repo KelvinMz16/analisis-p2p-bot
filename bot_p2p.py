@@ -61,7 +61,7 @@ def supabase_cleanup():
     except Exception as e:
         print(f"[Supabase] Cleanup error: {e}", flush=True)
 
-def supabase_select_all():
+def supabase_select_all(ts_gte=None):
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase credentials not set in environment")
     result = []
@@ -70,8 +70,9 @@ def supabase_select_all():
             all_data = []
             page_size = 1000
             offset = 0
+            filtro_ts = f"&ts=gte.{ts_gte}" if ts_gte else ""
             while True:
-                url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc&limit={page_size}&offset={offset}"
+                url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc&limit={page_size}&offset={offset}{filtro_ts}"
                 headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
                 resp = requests.get(url, headers=headers, timeout=(10, 10))
                 if resp.status_code != 200:
@@ -647,12 +648,6 @@ def _calc_margen(buy, sell, capital=None):
     cap = capital or CONFIG["capital"]
     return {"neto": neto, "pct": pct, "usd": cap * (pct / 100)}
 
-def _calc_margen_taker(buy, sell, capital=None):
-    neto = (buy - sell) - (sell * COMISION) - (buy * COMISION) - (sell * COMISION_BANCO)
-    pct = (neto / sell) * 100
-    cap = capital or CONFIG["capital"]
-    return {"neto": neto, "pct": pct, "usd": cap * (pct / 100)}
-
 def calcular_margen(asset, trans_amount=None):
     monto = trans_amount if trans_amount is not None else CONFIG["monto_filtro"]
     maker_venta = obtener_precio_p2p("BUY", asset, monto)
@@ -661,7 +656,7 @@ def calcular_margen(asset, trans_amount=None):
         return None
 
     m = _calc_margen(maker_compra, maker_venta)
-    t = _calc_margen_taker(maker_venta, maker_compra)
+    t = _calc_margen(maker_compra, maker_venta)
 
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta") or None
 
@@ -1581,31 +1576,28 @@ def procesar_callback(cq):
 
     elif data == "historial":
         try:
+            hoy_vet = datetime.now(VENEZUELA_TZ).date()
             registros = []
             try:
-                registros = supabase_select_all()
+                hoy_iso = datetime.now(VENEZUELA_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                registros = supabase_select_all(ts_gte=hoy_iso)
             except Exception as e:
                 print(f"Supabase lectura fallo, usando JSONL: {e}", flush=True)
                 if os.path.exists(HISTORIAL_PATH):
                     with open(HISTORIAL_PATH, "r") as f:
                         for l in f:
                             try:
-                                registros.append(json.loads(l))
+                                d = json.loads(l)
+                                dt_ts = datetime.fromisoformat(str(d.get("ts", "")).replace("Z", "+00:00"))
+                                if dt_ts.date() == hoy_vet:
+                                    registros.append(d)
                             except Exception:
                                 continue
             if not registros:
-                editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
+                editar_mensaje(chat_id, msg_id, f"Aún no hay datos históricos para hoy ({hoy_vet}).")
                 return
 
-            hoy_vet = datetime.now(VENEZUELA_TZ).date()
-            lineas_hoy = []
-            for d in registros:
-                try:
-                    dt_ts = datetime.fromisoformat(str(d["ts"]).replace("Z", "+00:00"))
-                    if dt_ts.date() == hoy_vet:
-                        lineas_hoy.append(d)
-                except Exception:
-                    continue
+            lineas_hoy = registros
             
             total_hoy = len(lineas_hoy)
             if total_hoy == 0:
