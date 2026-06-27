@@ -37,21 +37,6 @@ async function handleRequest(request) {
     })
   }
 
-  // Bybit API proxy (backup)
-  if (path.startsWith('/bybit-api/')) {
-    const subpath = path.split('/bybit-api/')[1]
-    const apiUrl = `https://api.bybit.com/${subpath}${url.search}`
-    const resp = await fetch(apiUrl, {
-      method: request.method,
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      body: request.method === 'POST' ? await request.text() : undefined,
-    })
-    const result = await resp.text()
-    return new Response(result, {
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-    })
-  }
-
   // Health check
   return new Response('OK', { headers: { 'Content-Type': 'text/plain' } })
 }

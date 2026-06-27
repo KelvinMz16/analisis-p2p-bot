@@ -1,25 +1,15 @@
-import socket
 import threading
-import json, os, re, ssl, time, urllib.request, urllib.error
+import json, os, ssl, time
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
-
-# ============================================================
-# CONFIGURACION
-# ============================================================
-def _safe_float(v, d):
-    try: return float(v)
-    except: return d
-def _safe_int(v, d):
-    try: return int(v)
-    except: return d
 
 # Supabase configuration (read from HF Secrets / environment variables)
 SUPABASE_CONFIG_TABLE = "bot_config"
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "historical_prices")
+SUPABASE_SIGNAL_TABLE = "signal_log"
 
 if SUPABASE_KEY:
     # Clean any whitespace or quotes that might have been pasted
@@ -74,16 +64,28 @@ def supabase_cleanup():
 def supabase_select_all():
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("Supabase credentials not set in environment")
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc&limit=10000"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-    }
-    resp = requests.get(url, headers=headers, timeout=(5, 5))
-    if resp.status_code != 200:
-        print(f"[DEBUG] Supabase GET status={resp.status_code} response={resp.text[:300]}", flush=True)
-        raise RuntimeError(f"Supabase GET failed: {resp.status_code}")
-    return resp.json()
+    result = []
+    def _do_select():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc&limit=10000"
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            resp = requests.get(url, headers=headers, timeout=(5, 5))
+            if resp.status_code != 200:
+                print(f"[DEBUG] Supabase GET status={resp.status_code} response={resp.text[:300]}", flush=True)
+                raise RuntimeError(f"Supabase GET failed: {resp.status_code}")
+            result.append(resp.json())
+        except Exception as e:
+            result.append(e)
+    t = threading.Thread(target=_do_select, daemon=True)
+    t.start()
+    t.join(6)
+    if t.is_alive():
+        raise RuntimeError("Supabase select_all timeout")
+    if not result:
+        raise RuntimeError("Supabase select_all returned no result")
+    if isinstance(result[0], Exception):
+        raise result[0]
+    return result[0]
 
 
 def supabase_load_config():
@@ -106,19 +108,25 @@ def supabase_load_config():
 def supabase_save_config(config_dict):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CONFIG_TABLE}?on_conflict=id"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates",
-    }
-    try:
-        resp = requests.post(url, json={"id": 1, "config": config_dict}, headers=headers, timeout=(5, 5))
-        if resp.status_code not in (200, 201):
-            print(f"[Supabase] Save config returned {resp.status_code}", flush=True)
-    except Exception as e:
-        print(f"[Supabase] Error saving config: {e}", flush=True)
+    def _do_save():
+        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CONFIG_TABLE}?on_conflict=id"
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates",
+        }
+        try:
+            resp = requests.post(url, json={"id": 1, "config": config_dict}, headers=headers, timeout=(5, 5))
+            if resp.status_code not in (200, 201):
+                print(f"[Supabase] Save config returned {resp.status_code}", flush=True)
+        except Exception as e:
+            print(f"[Supabase] Error saving config: {e}", flush=True)
+    t = threading.Thread(target=_do_save, daemon=True)
+    t.start()
+    t.join(6)
+    if t.is_alive():
+        print("[Supabase] Save config timeout - skipping", flush=True)
 
 
 CONFIG_PATH = "config_usuario.json"
@@ -189,14 +197,6 @@ def guardar_config_local():
     except Exception as e:
         print(f"Error guardando config: {e}", flush=True)
 
-
-def guardar_capital():
-    guardar_config_local()
-
-
-def guardar_umbral():
-    guardar_config_local()
-
 COMISION = 0.0025          # 0.25% Binance Maker
 COMISION_BANCO = 0.003     # 0.30% Pago Movil BDV
 COMISION_TOTAL = COMISION * 2 + COMISION_BANCO  # 0.25% compra + 0.25% venta + 0.30% banco = 0.80%
@@ -211,24 +211,15 @@ ALERTA_ENVIADA = set()  # assets con alerta ya enviada en este ciclo positivo
 ALERTA_ENVIADA_DEX = set()  # redes DEX con alerta ya enviada
 MARGE_ANTERIOR_DEX = {}     # network_key -> ultimo margen neto DEX
 VPS_EXPIRY = date(2026, 7, 24)
-VPS_EXPIRY_NOTIFIED = False
 
-# Monitoreo BCV via @subastasBCV
-_BCV_BANCOS_CONFIG = {
-    "bdv":  {"nombres": ["BDV", "BANCO DE VENEZUELA"], "label": "BDV"},
-    "mer":  {"nombres": ["MERCANTIL"], "label": "Mercantil"},
-    "bnc":  {"nombres": ["BNC"], "label": "BNC"},
-    "bbva": {"nombres": ["BBVA", "PROVINCIAL"], "label": "BBVA"},
-    "bt":   {"nombres": ["TRINIDAD", "BANCO DE LA TRINIDAD", "BT"], "label": "BT"},
-}
-# Estado actual por banco: banco_key -> {"activo": bool/None, "datos": dict, "ultimo_post_ts": float}
-_BCV_ESTADOS = {}
-_BCV_ULTIMO_POST_ID = None   # ultimo post_id procesado
-_BCV_STALE_TIMEOUT = 7200    # 2h sin posts -> considerar cerrado
-_BCV_FALSE_POSITIVE_TERMS = [
-    "falso positivo", "desactivar el bot", "error del bot",
-    "prueba temporal", "revisando bot",
-]
+# Timing de mercado: seguimiento de tendencias USDT/VES
+_ULTIMA_ALERTA_TIMING = {}
+TIMING_COOLDOWN = 3600       # 1h entre alertas del mismo tipo
+TIMING_THRESHOLD_PCT = 2.0   # % de desviacion respecto al promedio para alertar
+_SENALES_PENDIENTES = {}     # signal_key -> {"ciclos": int, "confianza": int, ...}
+_ULTIMOS_LOCK = threading.Lock()
+_AUTO_REFRESH_LOCK = threading.Lock()
+VPS_EXPIRY_NOTIFIED = False
 
 # Hourly aggregation containers (populated from Supabase history)
 compras_por_hora = defaultdict(list)  # key: hour 0-23, value: list of buy prices
@@ -276,31 +267,30 @@ else:
 # ============================================================
 # FUNCIONES TELEGRAM (exact pattern from youtube-shorts-bot)
 # ============================================================
-_session = None
+_session_local = threading.local()
 def _get_session():
-    global _session
-    if _session is None:
+    if not hasattr(_session_local, 'session') or _session_local.session is None:
         from requests.adapters import HTTPAdapter
-        _session = requests.Session()
+        _session_local.session = requests.Session()
         adapter = HTTPAdapter(pool_connections=2, pool_maxsize=2, max_retries=1)
-        _session.mount("http://", adapter)
-        _session.mount("https://", adapter)
-    return _session
+        _session_local.session.mount("http://", adapter)
+        _session_local.session.mount("https://", adapter)
+    return _session_local.session
 
 
 def _raw_ssl_post(url, json_data, timeout=60):
     import http.client
     import urllib.parse
-    ctx = ssl_mod.create_default_context()
+    ctx = ssl.create_default_context()
     ctx.check_hostname = False
-    ctx.verify_mode = ssl_mod.CERT_NONE
+    ctx.verify_mode = ssl.CERT_NONE
     try:
-        ctx.minimum_version = ssl_mod.TLSVersion.TLSv1_2
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     except AttributeError:
-        ctx.options |= ssl_mod.OP_NO_TLSv1 | ssl_mod.OP_NO_TLSv1_1
+        ctx.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
     try:
         ctx.set_ciphers('DEFAULT:@SECLEVEL=0')
-    except ssl_mod.SSLError:
+    except ssl.SSLError:
         pass
     parsed = urllib.parse.urlparse(url)
     body = json.dumps(json_data).encode()
@@ -318,7 +308,7 @@ def _raw_ssl_post(url, json_data, timeout=60):
         raise
 
 
-def _try_url(method, prefix, url, data, timeout):
+def _try_url(url, data, timeout):
     sess = _get_session()
     for attempt in range(2):
         try:
@@ -332,7 +322,6 @@ def _try_url(method, prefix, url, data, timeout):
                 except Exception:
                     pass
             if attempt < 1:
-                import time
                 time.sleep(1)
     return None, "All retries failed"
 
@@ -340,19 +329,19 @@ def _try_url(method, prefix, url, data, timeout):
 def _api_call(method, data=None, timeout=15):
     if USE_PROXY:
         proxy_url = f"{API_URL}/{method}"
-        result, error = _try_url(method, "Proxy", proxy_url, data, timeout)
+        result, error = _try_url(proxy_url, data, timeout)
         # Usar respuesta del proxy siempre que haya respuesta (incluso ok=false)
         # Solo intentar directo si el proxy no respondio (timeout/connection error)
         if result:
             return result
         if error:
             direct_url = f"{_DIRECT_API_BASE}/{method}"
-            result, error = _try_url(method, "Direct", direct_url, data, timeout)
+            result, error = _try_url(direct_url, data, timeout)
             if result:
                 return result
     else:
         direct_url = f"{_DIRECT_API_BASE}/{method}"
-        result, error = _try_url(method, "Direct", direct_url, data, timeout)
+        result, error = _try_url(direct_url, data, timeout)
         if result:
             return result
     return {"ok": False, "error": "All retries failed"}
@@ -378,7 +367,8 @@ def _construir_teclado():
         [{"text": f"\U0001F6D2 Filtro: {nombre_filtro()}", "callback_data": "ciclo_filtro"},
          {"text": "\U0001F4CB Estado", "callback_data": "status"}],
         [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
-         {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"}],
+         {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"},
+         {"text": "\U0001F4C9 Mercado", "callback_data": "timing_mercado"}],
         [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
 
@@ -524,34 +514,25 @@ def _fetch_all_spot_prices():
         return _COINGECKO_CACHE["data"] or {}
 
 
-def _fetch_spot_p2p(network_key):
-    if network_key == "USDC":
-        usdt_buy = obtener_precio_p2p("BUY", "USDT")
-        usdc_buy = obtener_precio_p2p("BUY", "USDC")
-        if usdt_buy and usdc_buy:
-            return usdc_buy / usdt_buy
-        return None
-    usdt_compra = obtener_precio_p2p("SELL", "USDT")
-    usdt_venta = obtener_precio_p2p("BUY", "USDT")
-    if not usdt_compra or not usdt_venta:
-        return None
-    usdt_mid = (usdt_compra + usdt_venta) / 2
-    asset_compra = obtener_precio_p2p("SELL", network_key)
-    asset_venta = obtener_precio_p2p("BUY", network_key)
-    if not asset_compra or not asset_venta:
-        return None
-    asset_mid = (asset_compra + asset_venta) / 2
-    return asset_mid / usdt_mid
+def _fetch_spot_p2p():
+    usdt_buy = obtener_precio_p2p("BUY", "USDT")
+    usdc_buy = obtener_precio_p2p("BUY", "USDC")
+    if usdt_buy and usdc_buy:
+        return usdc_buy / usdt_buy
+    return None
 
 
 def obtener_precio_spot(network_key):
     cfg = DEX_NETWORKS.get(network_key)
     if not cfg or not cfg.get("coingecko_id"):
         return None
-    price = _fetch_spot_p2p(network_key)
-    if price and price > 0:
-        print(f"  [Spot/{network_key}] P2P-derivado: ${price:.4f}", flush=True)
-        return price
+    # CoinGecko es fuente primaria para criptos (SOL/POL/BNB).
+    # P2P-derivado solo para USDC (mercado USDT/USDC es confiable).
+    if network_key == "USDC":
+        price = _fetch_spot_p2p()
+        if price and price > 0:
+            print(f"  [Spot/{network_key}] P2P-derivado: ${price:.4f}", flush=True)
+            return price
     data = _fetch_all_spot_prices()
     price = float(data.get(cfg["coingecko_id"], {}).get("usd", 0))
     if price > 0:
@@ -649,37 +630,40 @@ def calcular_arbitraje_dex(network_key):
 # ============================================================
 
 
+def _calc_margen(buy, sell, capital=None):
+    neto = (sell - buy) - (buy * COMISION) - (sell * COMISION) - (buy * COMISION_BANCO)
+    pct = (neto / buy) * 100
+    cap = capital or CONFIG["capital"]
+    return {"neto": neto, "pct": pct, "usd": cap * (pct / 100)}
+
+def _calc_margen_taker(buy, sell, capital=None):
+    neto = (buy - sell) - (sell * COMISION) - (buy * COMISION) - (sell * COMISION_BANCO)
+    pct = (neto / sell) * 100
+    cap = capital or CONFIG["capital"]
+    return {"neto": neto, "pct": pct, "usd": cap * (pct / 100)}
+
 def calcular_margen(asset, trans_amount=None):
-    # En Binance P2P:
-    # - "BUY" retorna anuncios donde Makers VENDEN (precio alto para el Taker que compra).
-    # - "SELL" retorna anuncios donde Makers COMPRAN (precio bajo para el Taker que vende).
-    # Para un Maker: compras barato (apareces en SELL) y vendes caro (apareces en BUY).
     monto = trans_amount if trans_amount is not None else CONFIG["monto_filtro"]
-    maker_venta = obtener_precio_p2p("BUY", asset, monto)   # Precio de venta Maker (alto) / Compra Taker
-    maker_compra = obtener_precio_p2p("SELL", asset, monto)  # Precio de compra Maker (bajo) / Venta Taker
+    maker_venta = obtener_precio_p2p("BUY", asset, monto)
+    maker_compra = obtener_precio_p2p("SELL", asset, monto)
     if maker_venta is None or maker_compra is None:
         return None
-    
-    # Maker Margen
-    ganancia_neta_maker = (maker_venta - maker_compra) - (maker_compra * COMISION) - (maker_venta * COMISION) - (maker_compra * COMISION_BANCO)
-    margen_maker = (ganancia_neta_maker / maker_compra) * 100
-    ganancia_usd_maker = CONFIG["capital"] * (margen_maker / 100)
-    
-    # Taker Margen (compra a maker_venta, vende a maker_compra)
-    ganancia_neta_taker = (maker_compra - maker_venta) - (maker_venta * COMISION) - (maker_compra * COMISION) - (maker_venta * COMISION_BANCO)
-    margen_taker = (ganancia_neta_taker / maker_venta) * 100
-    ganancia_usd_taker = CONFIG["capital"] * (margen_taker / 100)
+
+    m = _calc_margen(maker_compra, maker_venta)
+    t = _calc_margen_taker(maker_venta, maker_compra)
 
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta") or None
-    ganancia_ves_maker = (ganancia_usd_maker * tasa_ves) if tasa_ves else None
-    ganancia_ves_taker = (ganancia_usd_taker * tasa_ves) if tasa_ves else None
 
-    ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": margen_maker}
+    with _ULTIMOS_LOCK:
+        ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": m["pct"]}
+
     return {
         "asset": asset, "compra": maker_compra, "venta": maker_venta,
-        "margen": margen_maker, "ganancia_usd": ganancia_usd_maker, "ganancia_ves": ganancia_ves_maker,
+        "margen": m["pct"], "ganancia_usd": m["usd"],
+        "ganancia_ves": (m["usd"] * tasa_ves) if tasa_ves else None,
         "taker_compra": maker_venta, "taker_venta": maker_compra,
-        "taker_margen": margen_taker, "taker_ganancia_usd": ganancia_usd_taker, "taker_ganancia_ves": ganancia_ves_taker,
+        "taker_margen": t["pct"], "taker_ganancia_usd": t["usd"],
+        "taker_ganancia_ves": (t["usd"] * tasa_ves) if tasa_ves else None,
         "filtro": nombre_filtro(monto)
     }
 # ============================================================
@@ -700,33 +684,24 @@ def calcular_margen_usdt_usdc(trans_amount=None):
     
     if usdt_compra_maker is None or usdc_venta_maker is None or usdt_compra_taker is None or usdc_venta_taker is None:
         return None
-        
-    # Maker Margen
-    ganancia_neta_maker = (usdc_venta_maker - usdt_compra_maker) - (usdt_compra_maker * COMISION) - (usdc_venta_maker * COMISION) - (usdt_compra_maker * COMISION_BANCO)
-    margen_maker = (ganancia_neta_maker / usdt_compra_maker) * 100
-    ganancia_usd_maker = CONFIG["capital"] * (margen_maker / 100)
-    
-    # Taker Margen
-    ganancia_neta_taker = (usdc_venta_taker - usdt_compra_taker) - (usdt_compra_taker * COMISION) - (usdc_venta_taker * COMISION) - (usdt_compra_taker * COMISION_BANCO)
-    margen_taker = (ganancia_neta_taker / usdt_compra_taker) * 100
-    ganancia_usd_taker = CONFIG["capital"] * (margen_taker / 100)
-    
+
+    m = _calc_margen(usdt_compra_maker, usdc_venta_maker)
+    t = _calc_margen(usdt_compra_taker, usdc_venta_taker)
+
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta")
-    ganancia_ves_maker = (ganancia_usd_maker * tasa_ves) if tasa_ves else None
-    ganancia_ves_taker = (ganancia_usd_taker * tasa_ves) if tasa_ves else None
-    
+
     return {
         "asset": "USDT→USDC",
         "compra_usdt": usdt_compra_maker,
         "venta_usdc": usdc_venta_maker,
-        "margen": margen_maker,
-        "ganancia_usd": ganancia_usd_maker,
-        "ganancia_ves": ganancia_ves_maker,
+        "margen": m["pct"],
+        "ganancia_usd": m["usd"],
+        "ganancia_ves": (m["usd"] * tasa_ves) if tasa_ves else None,
         "taker_compra_usdt": usdt_compra_taker,
         "taker_venta_usdc": usdc_venta_taker,
-        "taker_margen": margen_taker,
-        "taker_ganancia_usd": ganancia_usd_taker,
-        "taker_ganancia_ves": ganancia_ves_taker,
+        "taker_margen": t["pct"],
+        "taker_ganancia_usd": t["usd"],
+        "taker_ganancia_ves": (t["usd"] * tasa_ves) if tasa_ves else None,
         "filtro": nombre_filtro(monto)
     }
 
@@ -862,6 +837,271 @@ def generar_reporte_horarios():
 
 
 # ============================================================
+# SISTEMA DE SEÑALES MULTICAPA (90%+ precision objetivo)
+# ============================================================
+
+def _calcular_tendencia_6h():
+    """Regresion lineal simple sobre ultimas 6h de precio compra USDT.
+    Retorna pendiente (positiva=subiendo, negativa=bajando) o None."""
+    precios, timestamps = [], []
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d:
+                            continue
+                        ts = d.get("ts", "")
+                        if not ts:
+                            continue
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        horas = (datetime.now(VENEZUELA_TZ) - dt).total_seconds() / 3600
+                        if horas > 6:
+                            continue
+                        compra = d["USDT"].get("compra")
+                        if compra:
+                            precios.append(float(compra))
+                            timestamps.append(horas)
+                    except Exception:
+                        continue
+    except Exception as e:
+        print(f"Error calculando tendencia: {e}", flush=True)
+        return None
+    if len(precios) < 5:
+        return None
+    n = len(precios)
+    x_sum, y_sum = sum(timestamps), sum(precios)
+    xy_sum = sum(x * y for x, y in zip(timestamps, precios))
+    x2_sum = sum(x * x for x in timestamps)
+    denom = n * x2_sum - x_sum * x_sum
+    return (n * xy_sum - x_sum * y_sum) / denom if denom else None
+
+
+def _detectar_niveles_clave():
+    """Encuentra niveles de soporte (compra) y resistencia (venta) del USDT.
+    Retorna (soportes, resistencias) como listas de precios."""
+    compras, ventas = [], []
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d:
+                            continue
+                        ts = d.get("ts", "")
+                        if not ts:
+                            continue
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        if (datetime.now(VENEZUELA_TZ) - dt).total_seconds() > 86400 * 7:
+                            continue
+                        c = d["USDT"].get("compra")
+                        v = d["USDT"].get("venta")
+                        if c: compras.append(float(c))
+                        if v: ventas.append(float(v))
+                    except Exception:
+                        continue
+    except Exception:
+        return [], []
+    if len(compras) < 20:
+        return [], []
+
+    def _agrupar(precios, bucket=2):
+        buckets = defaultdict(list)
+        for p in precios:
+            buckets[round(p / bucket) * bucket].append(p)
+        umbral = max(len(v) for v in buckets.values()) * 0.6
+        return sorted([k for k, v in buckets.items() if len(v) >= umbral])
+
+    return _agrupar(compras)[:3], _agrupar(ventas)[-3:]
+
+
+def _cerca_de(precio, niveles, tolerancia=3):
+    return any(abs(precio - n) <= tolerancia for n in niveles)
+
+
+def _evaluar_senal_multicapa():
+    """Evalua todas las capas y retorna (senal, confianza, detalles, mensaje)."""
+    r = calcular_margen("USDT")
+    if not r:
+        return None, 0, {}, None
+
+    precios_compra, precios_venta = [], []
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d:
+                            continue
+                        ts = d.get("ts", "")
+                        if not ts:
+                            continue
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        if (datetime.now(VENEZUELA_TZ) - dt).total_seconds() > 86400:
+                            continue
+                        c = d["USDT"].get("compra")
+                        v = d["USDT"].get("venta")
+                        if c: precios_compra.append(float(c))
+                        if v: precios_venta.append(float(v))
+                    except Exception:
+                        continue
+    except Exception as e:
+        print(f"Error historial: {e}", flush=True)
+        return None, 0, {}, None
+    if len(precios_compra) < 10 or len(precios_venta) < 10:
+        return None, 0, {}, None
+
+    avg_compra = sum(precios_compra) / len(precios_compra)
+    avg_venta = sum(precios_venta) / len(precios_venta)
+    desv_compra = ((r["compra"] - avg_compra) / avg_compra) * 100
+    desv_venta = ((r["venta"] - avg_venta) / avg_venta) * 100
+    pendiente = _calcular_tendencia_6h()
+    soportes, resistencias = _detectar_niveles_clave()
+    en_soporte = _cerca_de(r["compra"], soportes)
+    en_resistencia = _cerca_de(r["venta"], resistencias)
+
+    detalles = {
+        "desv_compra": desv_compra, "desv_venta": desv_venta,
+        "pendiente": pendiente, "en_soporte": en_soporte,
+        "en_resistencia": en_resistencia, "avg_compra": avg_compra,
+        "avg_venta": avg_venta,
+    }
+
+    if desv_compra <= -TIMING_THRESHOLD_PCT:
+        conf, razones = 60, ["Precio bajo vs promedio 24h"]
+        if pendiente is not None:
+            if pendiente >= -0.5:
+                conf += 15; razones.append("Tendencia estable o subiendo")
+            else:
+                conf -= 10; razones.append("Sigue cayendo (esperar)")
+        if en_soporte:
+            conf += 15; razones.append("Cerca de soporte histórico")
+        if desv_compra <= -3:
+            conf += 10; razones.append("Oportunidad fuerte (>3%)")
+        if soportes:
+            razones.append(f"Soporte en {soportes[0]} VES")
+        return ("compra", min(conf, 100), detalles,
+            f"\U0001F4C9 *SEÑAL DE COMPRA* (Confianza: {min(conf,100)}%)\n"
+            f"Precio compra: *{r['compra']:.2f} VES* ({desv_compra:+.2f}% vs promedio)\n"
+            f"Promedio 24h: {avg_compra:.2f} VES | Venta: {r['venta']:.2f} VES\n"
+            f"{'📈 Tendencia: estable o subiendo' if pendiente is None or pendiente >= -0.5 else '📉 Tendencia: sigue cayendo'}\n"
+            + (f"✅ Cerca de soporte histórico ({soportes[0]} VES)" if en_soporte else "")
+            + f"\nRazones: {', '.join(razones)}\n\n"
+            f"\U0001F449 *Acción:* COMPRA USDT ahora para vender cuando suba.")
+
+    if desv_venta >= TIMING_THRESHOLD_PCT:
+        conf, razones = 60, ["Precio alto vs promedio 24h"]
+        if pendiente is not None:
+            if pendiente <= 0.5:
+                conf += 15; razones.append("Tendencia estable o bajando")
+            else:
+                conf -= 10; razones.append("Sigue subiendo (esperar)")
+        if en_resistencia:
+            conf += 15; razones.append("Cerca de resistencia histórica")
+        if desv_venta >= 3:
+            conf += 10; razones.append("Oportunidad fuerte (>3%)")
+        if resistencias:
+            razones.append(f"Resistencia en {resistencias[-1]} VES")
+        return ("venta", min(conf, 100), detalles,
+            f"\U0001F4C8 *SEÑAL DE VENTA* (Confianza: {min(conf,100)}%)\n"
+            f"Precio venta: *{r['venta']:.2f} VES* ({desv_venta:+.2f}% vs promedio)\n"
+            f"Promedio 24h: {avg_venta:.2f} VES | Compra: {r['compra']:.2f} VES\n"
+            f"{'📉 Tendencia: estable o bajando' if pendiente is None or pendiente <= 0.5 else '📈 Tendencia: sigue subiendo'}\n"
+            + (f"✅ Cerca de resistencia histórica ({resistencias[-1]} VES)" if en_resistencia else "")
+            + f"\nRazones: {', '.join(razones)}\n\n"
+            f"\U0001F449 *Acción:* VENDE tus USDT ahora, el mercado está alto.")
+
+    return None, 0, detalles, None
+
+
+def _registrar_senal_supabase(senal_data):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    def _do():
+        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_SIGNAL_TABLE}"
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                   "Content-Type": "application/json", "Prefer": "return=representation"}
+        try:
+            resp = requests.post(url, json=senal_data, headers=headers, timeout=(5, 5))
+            if resp.status_code not in (200, 201):
+                print(f"[Supabase] Signal log: {resp.status_code} {resp.text[:200]}", flush=True)
+        except Exception as e:
+            print(f"[Supabase] Error saving signal: {e}", flush=True)
+    t = threading.Thread(target=_do, daemon=True)
+    t.start(); t.join(6)
+    if t.is_alive():
+        print("[Supabase] Signal log timeout", flush=True)
+
+
+def _verificar_resultados_senales():
+    """Revisa senales previas en Supabase y verifica si fueron aciertos.
+    Compra: acierto si precio venta subio >=0.5% en 4h.
+    Venta: acierto si precio compra bajo >=0.5% en 4h."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    result = []
+    def _do_query():
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_SIGNAL_TABLE}?select=*&result=is.null&order=id.desc&limit=20"
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            resp = requests.get(url, headers=headers, timeout=(5, 5))
+            if resp.status_code == 200:
+                result.append(resp.json())
+        except Exception:
+            pass
+    t = threading.Thread(target=_do_query, daemon=True)
+    t.start(); t.join(6)
+    if t.is_alive() or not result:
+        return
+
+    ahora = datetime.now(VENEZUELA_TZ)
+    r_actual = calcular_margen("USDT")
+    if not r_actual:
+        return
+
+    for senal in result[0]:
+        ts_senal = senal.get("ts", "")
+        if not ts_senal:
+            continue
+        try:
+            dt_senal = datetime.fromisoformat(ts_senal.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        horas_diff = (ahora - dt_senal).total_seconds() / 3600
+        if horas_diff < 3.5:
+            continue  # aun es muy pronto
+
+        tipo = senal.get("signal_type")
+        precio_orig = float(senal.get("precio_compra_actual") or 0)
+        if tipo == "compra":
+            precio_hoy = r_actual["venta"]
+            cambio = ((precio_hoy - precio_orig) / precio_orig) * 100 if precio_orig else 0
+            result_text = "acierto" if cambio >= 0.5 else "fallo"
+        elif tipo == "venta":
+            precio_hoy = r_actual["compra"]
+            precio_orig = float(senal.get("precio_venta_actual") or 0)
+            cambio = ((precio_orig - precio_hoy) / precio_orig) * 100 if precio_orig else 0
+            result_text = "acierto" if cambio >= 0.5 else "fallo"
+        else:
+            continue
+
+        def _do_update(sid, res, precio):
+            url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_SIGNAL_TABLE}?id=eq.{sid}"
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                       "Content-Type": "application/json", "Prefer": "return=representation"}
+            try:
+                requests.patch(url, json={"result": res, "result_checked_at": ahora.isoformat(),
+                                          "precio_resultado": round(precio, 2)}, headers=headers, timeout=(5, 5))
+            except Exception:
+                pass
+        tu = threading.Thread(target=_do_update, args=(senal["id"], result_text, precio_hoy), daemon=True)
+        tu.start()
+
+
+# ============================================================
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
 def procesar_mensaje(texto, chat_id):
@@ -872,7 +1112,7 @@ def procesar_mensaje(texto, chat_id):
             if nuevo > 0:
                 viejo = CONFIG["capital"]
                 CONFIG["capital"] = nuevo
-                guardar_capital()
+                guardar_config_local()
                 enviar_menu(chat_id, f"Capital actualizado: ${viejo:.0f} -> ${nuevo:.0f}")
             else:
                 _tg_call("sendMessage", {"chat_id": chat_id, "text": "Debe ser mayor a 0."})
@@ -886,7 +1126,7 @@ def procesar_mensaje(texto, chat_id):
             if 0 < nuevo <= 100:
                 viejo = CONFIG["margen_objetivo"]
                 CONFIG["margen_objetivo"] = nuevo
-                guardar_umbral()
+                guardar_config_local()
                 ALERTA_ENVIADA.clear()
                 enviar_menu(chat_id, f"Umbral actualizado: {viejo:.1f}% -> {nuevo:.1f}%")
             else:
@@ -905,23 +1145,26 @@ AUTO_REFRESH = {}  # (chat_id, msg_id) -> {"data": str, "ticks": int}
 
 
 def _linea_ganancia(r):
-    v = f"${r['ganancia_usd']:.2f} USD"
+    usd = r.get('ganancia_usd', 0)
+    v = f"${usd:.2f} USD"
     if r.get('ganancia_ves'):
         v += f" | Bs.{r['ganancia_ves']:.2f}"
     return v
 
 
 def registrar_refresh(chat_id, msg_id, data):
-    AUTO_REFRESH[(chat_id, msg_id)] = {"data": data, "ticks": 5}
+    with _AUTO_REFRESH_LOCK:
+        AUTO_REFRESH[(chat_id, msg_id)] = {"data": data, "ticks": 5}
 
 
 def limpiar_refresh(chat_id, msg_id=None):
-    if msg_id:
-        AUTO_REFRESH.pop((chat_id, msg_id), None)
-    else:
-        for k in list(AUTO_REFRESH):
-            if k[0] == chat_id:
-                del AUTO_REFRESH[k]
+    with _AUTO_REFRESH_LOCK:
+        if msg_id:
+            AUTO_REFRESH.pop((chat_id, msg_id), None)
+        else:
+            for k in list(AUTO_REFRESH):
+                if k[0] == chat_id:
+                    del AUTO_REFRESH[k]
 
 
 def _render_precio(chat_id, msg_id):
@@ -1032,13 +1275,13 @@ def _render_combo(chat_id, msg_id):
 
 
 def _render_detalle(chat_id, msg_id, asset):
-    CONFIG["default_crypto"] = asset
-    guardar_config_local()
     r = calcular_margen(asset)
     if not r:
         editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
         registrar_refresh(chat_id, msg_id, f"detalle_{asset}")
         return
+    CONFIG["default_crypto"] = asset
+    guardar_config_local()
     spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
     rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
     best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
@@ -1135,10 +1378,16 @@ def _render_dex(chat_id, msg_id):
 
 
 def _refrescar_paneles():
-    for (chat_id, msg_id), info in list(AUTO_REFRESH.items()):
-        info["ticks"] -= 1
-        if info["ticks"] <= 0:
-            del AUTO_REFRESH[(chat_id, msg_id)]
+    with _AUTO_REFRESH_LOCK:
+        snapshot = list(AUTO_REFRESH.items())
+        to_del = [k for k, v in AUTO_REFRESH.items() if v["ticks"] <= 1]
+        for k in to_del:
+            del AUTO_REFRESH[k]
+        for k, v in AUTO_REFRESH.items():
+            if k not in to_del:
+                v["ticks"] -= 1
+    for (chat_id, msg_id), info in snapshot:
+        if (chat_id, msg_id) in to_del:
             continue
         cb_data = info["data"]
         try:
@@ -1197,24 +1446,26 @@ def procesar_callback(cq):
 
     elif data == "historial":
         try:
-            lineas = []
+            registros = []
             try:
                 registros = supabase_select_all()
-                lineas = [json.dumps(r) + "\n" for r in registros]
             except Exception as e:
                 print(f"Supabase lectura fallo, usando JSONL: {e}", flush=True)
                 if os.path.exists(HISTORIAL_PATH):
                     with open(HISTORIAL_PATH, "r") as f:
-                        lineas = f.readlines()
-            if not lineas:
+                        for l in f:
+                            try:
+                                registros.append(json.loads(l))
+                            except Exception:
+                                continue
+            if not registros:
                 editar_mensaje(chat_id, msg_id, "Aún no hay datos históricos.")
                 return
 
             hoy_vet = datetime.now(VENEZUELA_TZ).date()
             lineas_hoy = []
-            for l in lineas:
+            for d in registros:
                 try:
-                    d = json.loads(l)
                     dt_ts = datetime.fromisoformat(str(d["ts"]).replace("Z", "+00:00"))
                     if dt_ts.date() == hoy_vet:
                         lineas_hoy.append(d)
@@ -1298,6 +1549,35 @@ def procesar_callback(cq):
             print(f"Error en callback dex_multired: {e}", flush=True)
             editar_mensaje(chat_id, msg_id, "Error al calcular arbitraje DEX Multi-Red.")
 
+    elif data == "timing_mercado":
+        senal, confianza, det, msg_senal = _evaluar_senal_multicapa()
+        if msg_senal:
+            texto = msg_senal
+        else:
+            rr = calcular_margen("USDT")
+            if rr:
+                texto = (
+                    f"\U0001F4CA *Mercado USDT/VES*\n\n"
+                    f"Precio compra: {rr['compra']:.2f} VES\n"
+                    f"Precio venta: {rr['venta']:.2f} VES\n\n"
+                    f"\u23F3 Sin señal clara ahora.\n"
+                    f"Se necesitan m\u00ednimo 10 registros en las \u00faltimas 24h.\n"
+                    f"El bot monitorea y alertará autom\u00e1ticamente."
+                )
+            else:
+                texto = "No se pudo obtener el precio actual de USDT."
+        kb = json.dumps({
+            "inline_keyboard": [
+                [{"text": "\U0001F504 Actualizar", "callback_data": "timing_mercado"},
+                 {"text": "\U0001F519 Inicio", "callback_data": "menu"}]
+            ]
+        })
+        _tg_call("editMessageText", {
+            "chat_id": chat_id, "message_id": msg_id,
+            "text": texto, "parse_mode": "Markdown",
+            "reply_markup": kb
+        }, ignore_400=True)
+
     elif data == "menu":
         limpiar_refresh(chat_id)
         editar_mensaje(chat_id, msg_id,
@@ -1318,13 +1598,16 @@ def _get_updates(offset):
 def polling_telegram():
     offset = 0
     while True:
-        updates = _get_updates(offset)
-        for update in updates:
-            offset = update["update_id"] + 1
-            if "callback_query" in update:
-                procesar_callback(update["callback_query"])
-            elif "message" in update and update["message"].get("text"):
-                procesar_mensaje(update["message"]["text"], update["message"]["chat"]["id"])
+        try:
+            updates = _get_updates(offset)
+            for update in updates:
+                offset = update["update_id"] + 1
+                if "callback_query" in update:
+                    procesar_callback(update["callback_query"])
+                elif "message" in update and update["message"].get("text"):
+                    procesar_mensaje(update["message"]["text"], update["message"]["chat"]["id"])
+        except Exception as e:
+            print(f"Error en polling: {e}", flush=True)
         time.sleep(3)
 # ============================================================
 
@@ -1334,210 +1617,6 @@ def polling_telegram():
 # ============================================================
 _ESTADO_SUENO = None  # "dormido" | "despierto" | None
 
-
-def _normalizar_texto(text):
-    """Elimina acentos/combining marks y chars invisibles.
-    Esto permite que regex como 'MINIMO' funcione con 'MÍNIMO'."""
-    import unicodedata
-    text = unicodedata.normalize('NFKD', text)
-    text = ''.join(c for c in text if not unicodedata.combining(c))
-    text = text.replace('\u200b', '')  # zero-width space
-    return text
-
-
-def _es_falso_positivo(msg):
-    """Detecta si un post es una nota del admin (falso positivo, prueba, etc)."""
-    lower = msg.lower()
-    return any(term in lower for term in _BCV_FALSE_POSITIVE_TERMS)
-
-
-def _identificar_banco(msg):
-    """Detecta que banco(s) menciona el post. Retorna primera coincidencia o None."""
-    for bk, cfg in _BCV_BANCOS_CONFIG.items():
-        for nombre in cfg["nombres"]:
-            if nombre in msg:
-                return bk
-    return None
-
-
-def scrape_subastasbcv():
-    """Scrapea @subastasBCV en busca de estado de intervencion por banco.
-    Retorna dict con keys: banco(str), activo(bool), tasa(str), minimo(str),
-    maximo(str), hora(str) o None si no encuentra cambios.
-    Actualiza _BCV_ESTADOS[banco]['ultimo_post_ts'] al ver cualquier post."""
-    global _BCV_ULTIMO_POST_ID
-    try:
-        r = requests.get("https://t.me/s/subastasBCV", timeout=15)
-        html = r.text
-
-        # Buscar todos los posts con data-post
-        posts = re.findall(
-            r'<div class="tgme_widget_message_wrap[^"]*">.*?data-post="([^"]+)".*?'
-            r'<div class="tgme_widget_message_text[^"]*" dir="auto">(.*?)</div>',
-            html, re.DOTALL
-        )
-
-        ahora = time.time()
-
-        for post_id, msg_html in posts:
-            msg = re.sub(r'<[^>]+>', '', msg_html)
-            msg = msg.replace('&#36;', '$').replace('&#036;', '$')
-            msg = msg.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
-            msg = msg.replace('&#39;', "'").replace('&quot;', '"')
-            msg = _normalizar_texto(msg)
-
-            # Identificar que banco(s) menciona
-            banco = _identificar_banco(msg)
-            if not banco:
-                continue
-
-            # Actualizar timestamp de este banco
-            est = _estado_bcv(banco)
-            est["ultimo_post_ts"] = ahora
-
-            # Saltar falsos positivos (notas del admin)
-            if _es_falso_positivo(msg):
-                continue
-
-            # Activo — buscar estructura con TASA/MIN/MAX/HORA
-            if "INTERVENCI" in msg and "ACTIVA" in msg:
-                tasa = re.search(r'TASA:?\s*Bs\.?\s*([\d.,]+)', msg)
-                minimo = re.search(r'(?:MINIMO|MIN|M[NI]NIMO):?\s*(\d{1,4}(?:[\d.,]*))', _normalizar_texto(msg))
-                if not minimo:
-                    minimo = re.search(r'MINIMO:\s*(\d[\d.]*)', msg)
-                maximo = re.search(r'(?:MAXIMO|MAX|M[ÁA]XIMO):?\s*(\d{1,4}(?:[\d.,]*))', _normalizar_texto(msg))
-                if not maximo:
-                    maximo = re.search(r'MAXIMO:\s*(\d[\d.]*)', msg)
-                hora = re.search(r'HORA:?\s*([\d]{1,2}:[\d]{2})', msg)
-                # Fallback: buscar montos seguidos de signo $
-                if not minimo or not maximo:
-                    nums = re.findall(r'(\d+\.?\d*)\s*\$', msg)
-                    if len(nums) >= 2:
-                        if not minimo:
-                            minimo = type('obj', (object,), {'group': lambda s, i: nums[0]})()
-                        if not maximo:
-                            maximo = type('obj', (object,), {'group': lambda s, i: nums[-1]})()
-
-                data = {
-                    "banco": banco,
-                    "activo": True,
-                    "tasa": tasa.group(1) if tasa else "",
-                    "minimo": minimo.group(1) if minimo else "",
-                    "maximo": maximo.group(1) if maximo else "",
-                    "hora": hora.group(1) if hora else "",
-                    "post_id": post_id,
-                }
-
-                if data["post_id"] != _BCV_ULTIMO_POST_ID:
-                    _BCV_ULTIMO_POST_ID = data["post_id"]
-                    return data
-
-            # Cerrada
-            if "INTERVENCI" in msg and "CERRADA" in msg:
-                data = {
-                    "banco": banco,
-                    "activo": False,
-                    "tasa": "",
-                    "minimo": "",
-                    "maximo": "",
-                    "hora": "",
-                    "post_id": post_id,
-                }
-                if data["post_id"] != _BCV_ULTIMO_POST_ID:
-                    _BCV_ULTIMO_POST_ID = data["post_id"]
-                    return data
-
-        return None
-    except Exception as e:
-        print(f"Error scraping @subastasBCV: {e}", flush=True)
-        return None
-
-
-def _estado_bcv(banco_key):
-    """Obtiene el estado actual de un banco, inicializandolo si es necesario."""
-    if banco_key not in _BCV_ESTADOS:
-        _BCV_ESTADOS[banco_key] = {"activo": None, "datos": {}, "ultimo_post_ts": 0.0}
-    return _BCV_ESTADOS[banco_key]
-
-
-def _loop_bcv_scrape():
-    """Hilo separado: monitorea @subastasBCV cada 15s.
-    Soporta multiples bancos via _BCV_BANCOS_CONFIG.
-    Incluye deteccion de stale (2h sin posts -> considerar cerrado)."""
-    print("  Monitoreo BCV cada 15s...", flush=True)
-    _stale_notified = set()  # bancos con stale ya notificado
-    while True:
-        try:
-            if not en_horario():
-                time.sleep(15)
-                continue
-            bcv = scrape_subastasbcv()
-            if bcv is not None:
-                banco = bcv.get("banco", "bdv")
-                estado = _estado_bcv(banco)
-                _stale_notified.discard(banco)
-                prev = estado["activo"]
-                estado["activo"] = bcv["activo"]
-                estado["ultimo_post_ts"] = time.time()
-                if bcv["activo"]:
-                    estado["datos"] = bcv
-                if prev is not None and bcv["activo"] != prev:
-                    label = _BCV_BANCOS_CONFIG.get(banco, {}).get("label", banco.upper())
-                    if bcv["activo"]:
-                        texto = (
-                            f"\U0001F3E6\U0001F7E2 *{label} - Intervenci\u00f3n ACTIVA*\n"
-                            f"Tasa: *Bs. {bcv['tasa']}*\n"
-                            f"M\u00ednimo: *{bcv['minimo']}$* | M\u00e1ximo: *{bcv['maximo']}$*\n"
-                            f"Hora: {bcv['hora']} VE\n"
-                            f"Fuente: @subastasBCV"
-                        )
-                    else:
-                        datos_prev = estado["datos"] if not bcv["activo"] else bcv
-                        texto = (
-                            f"\U0001F3E6\U0001F534 *{label} - Intervenci\u00f3n CERRADA*\n"
-                            f"\u00daltimos datos: Bs. {datos_prev.get('tasa', '?')} "
-                            f"| {datos_prev.get('minimo', '?')}$ - {datos_prev.get('maximo', '?')}$\n"
-                            f"Fuente: @subastasBCV"
-                        )
-                    _tg_call("sendMessage", {
-                        "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                        "text": texto
-                    })
-                    print(f">>> BCV {banco} cambio: {'ACTIVA' if bcv['activo'] else 'CERRADA'} <<<", flush=True)
-                if prev is None:
-                    estado["activo"] = bcv["activo"]
-
-            # Stale detection: por cada banco con estado ACTIVO
-            ahora = time.time()
-            for bk, cfg in _BCV_BANCOS_CONFIG.items():
-                est = _BCV_ESTADOS.get(bk)
-                if not est or est["activo"] != True:
-                    _stale_notified.discard(bk)
-                    continue
-                if est["ultimo_post_ts"] == 0:
-                    continue
-                if bk in _stale_notified:
-                    continue
-                tiempo_sin_datos = ahora - est["ultimo_post_ts"]
-                if tiempo_sin_datos > _BCV_STALE_TIMEOUT:
-                    _stale_notified.add(bk)
-                    label = cfg.get("label", bk.upper())
-                    est["activo"] = None  # estado incierto
-                    print(f">>> BCV STALE {bk}: {tiempo_sin_datos/3600:.1f}h sin posts <<<", flush=True)
-                    _tg_call("sendMessage", {
-                        "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                        "text": (
-                            f"\u26A0\ufe0f *{label} - Estado incierto*\n"
-                            f"No se han visto publicaciones de @subastasBCV sobre {label} "
-                            f"en las \u00faltimas {_BCV_STALE_TIMEOUT//3600}h.\n"
-                            f"\u00daltimos datos conocidos: Bs. {est['datos'].get('tasa', '?')} "
-                            f"| {est['datos'].get('minimo', '?')}$ - {est['datos'].get('maximo', '?')}$\n"
-                            f"Posible cierre de intervenci\u00f3n no detectado."
-                        )
-                    })
-        except Exception as e:
-            print(f"Error en loop BCV: {e}", flush=True)
-        time.sleep(15)
 
 
 def loop_monitoreo():
@@ -1611,10 +1690,6 @@ def loop_monitoreo():
                 estables = [r for r in mejores if r["asset"] == "USDT"]
                 top = estables[0] if estables else None
                 top_general = mejores[0]
-                
-                ganancia_ves_top = ""
-                if top and top.get("ganancia_ves"):
-                    ganancia_ves_top = f" | Bs.{top['ganancia_ves']:.2f}"
 
                 for r in mejores:
                     if r["asset"] != "USDT":
@@ -1640,38 +1715,32 @@ def loop_monitoreo():
                     spread_bruto = ((top['venta'] - top['compra']) / top['compra']) * 100
                     
                     limite_anuncio = f"{CONFIG['monto_filtro']} Bs" if CONFIG['monto_filtro'] > 0 else "libre (ej. 400 Bs)"
-                    ves_ganancia_str = f"Bs.{top['ganancia_ves']:.2f}" if top.get("ganancia_ves") else f"Bs.{(top['ganancia_usd'] * top['compra']):.2f}"
+                    tasa_ves_alerta = ULTIMOS.get("USDT", {}).get("venta") or top['compra']
+                    ves_ganancia_str = f"Bs.{top['ganancia_ves']:.2f}" if top.get("ganancia_ves") else f"Bs.{top['ganancia_usd'] * tasa_ves_alerta:.2f}"
                     
                     # Cómputo del escenario alternativo
                     comparativo_str = ""
                     maker_compra = top['compra']
+                    tasa_ves_alt = ULTIMOS.get("USDT", {}).get("venta", maker_compra)
                     if CONFIG["monto_filtro"] > 0:
-                        # Filtrado fraccionado: comparar con vender todo de golpe (Mayorista)
                         venta_may = obtener_precio_p2p("BUY", top['asset'], trans_amount=0)
                         if venta_may:
-                            gan_net_may = (venta_may - maker_compra) - (maker_compra * COMISION) - (venta_may * COMISION) - (maker_compra * COMISION_BANCO)
-                            margen_may = (gan_net_may / maker_compra) * 100
-                            gan_usd_may = CONFIG["capital"] * (margen_may / 100)
-                            gan_ves_may = gan_usd_may * maker_compra
+                            m = _calc_margen(maker_compra, venta_may)
                             comparativo_str = (
                                 f"\n\U0001F504 *Escenario Alternativo (Vender todo de golpe - Mayorista):*\n"
                                 f"- Vender todo a: *{venta_may:.2f} VES*\n"
-                                f"- Margen Neto: {margen_may:+.2f}%\n"
-                                f"- Ganancia Neta Total: *${gan_usd_may:.2f} USD* (~Bs.{gan_ves_may:.2f})\n"
+                                f"- Margen Neto: {m['pct']:+.2f}%\n"
+                                f"- Ganancia Neta Total: *${m['usd']:.2f} USD* (~Bs.{m['usd'] * tasa_ves_alt:.2f})\n"
                             )
                     else:
-                        # Filtrado Mayorista: comparar con vender fraccionado a $10 (8000 Bs)
                         venta_frac = obtener_precio_p2p("BUY", top['asset'], trans_amount=8000)
                         if venta_frac:
-                            gan_net_frac = (venta_frac - maker_compra) - (maker_compra * COMISION) - (venta_frac * COMISION) - (maker_compra * COMISION_BANCO)
-                            margen_frac = (gan_net_frac / maker_compra) * 100
-                            gan_usd_frac = CONFIG["capital"] * (margen_frac / 100)
-                            gan_ves_frac = gan_usd_frac * maker_compra
+                            m = _calc_margen(maker_compra, venta_frac)
                             comparativo_str = (
                                 f"\n\U0001F504 *Escenario Alternativo (Vender fraccionado de a $10 / 8K Bs):*\n"
                                 f"- Vender en partes a: *{venta_frac:.2f} VES*\n"
-                                f"- Margen Neto: {margen_frac:+.2f}%\n"
-                                f"- Ganancia Neta Total: *${gan_usd_frac:.2f} USD* (~Bs.{gan_ves_frac:.2f})\n"
+                                f"- Margen Neto: {m['pct']:+.2f}%\n"
+                                f"- Ganancia Neta Total: *${m['usd']:.2f} USD* (~Bs.{m['usd'] * tasa_ves_alt:.2f})\n"
                             )
 
                     warning_msg = ""
@@ -1699,6 +1768,58 @@ def loop_monitoreo():
                     })
                 elif top and top["margen"] < CONFIG["margen_objetivo"]:
                     ALERTA_ENVIADA.discard(top["asset"])
+
+            # ============================================================
+            # SISTEMA DE SEÑALES MULTICAPA (con confirmacion 2 ciclos)
+            # ============================================================
+            senal, confianza, det, msg_senal = _evaluar_senal_multicapa()
+
+            if senal:
+                signal_key = f"{senal}_{datetime.now(VENEZUELA_TZ).strftime('%Y%m%d%H')}"
+                prev = _SENALES_PENDIENTES.get(signal_key)
+                if prev is None:
+                    _SENALES_PENDIENTES[signal_key] = {
+                        "ciclos": 1, "confianza": confianza,
+                        "detalles": det, "msg": msg_senal, "ts": time.time(),
+                    }
+                else:
+                    prev["ciclos"] += 1
+                    if prev["ciclos"] >= 2 and not prev.get("enviada"):
+                        prev["enviada"] = True
+                        last_ts = _ULTIMA_ALERTA_TIMING.get(senal, 0)
+                        if time.time() - last_ts > TIMING_COOLDOWN:
+                            _ULTIMA_ALERTA_TIMING[senal] = time.time()
+                            _tg_call("sendMessage", {
+                                "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
+                                "text": msg_senal
+                            })
+                            print(f">>> SEÑAL {senal} (confianza {confianza}%) <<<", flush=True)
+                            _registrar_senal_supabase({
+                                "signal_type": senal,
+                                "precio_compra_actual": round(det.get("avg_compra", 0), 2),
+                                "precio_venta_actual": round(det.get("avg_venta", 0), 2),
+                                "avg_compra_24h": round(det.get("avg_compra", 0), 2),
+                                "avg_venta_24h": round(det.get("avg_venta", 0), 2),
+                                "desviacion_pct": round(det.get("desv_compra" if senal == "compra" else "desv_venta", 0), 2),
+                                "tendencia_6h": det.get("pendiente"),
+                                "cerca_soporte": det.get("en_soporte", False),
+                                "cerca_resistencia": det.get("en_resistencia", False),
+                                "confirmada": True,
+                                "detalles": json.dumps(det),
+                            })
+
+                ahora_ts = time.time()
+                for k in list(_SENALES_PENDIENTES):
+                    if ahora_ts - _SENALES_PENDIENTES[k]["ts"] > 1800:
+                        del _SENALES_PENDIENTES[k]
+            else:
+                for k in list(_SENALES_PENDIENTES):
+                    if not _SENALES_PENDIENTES[k].get("enviada"):
+                        del _SENALES_PENDIENTES[k]
+
+            # Verificar resultados de senales previas (cada 30 ciclos)
+            if ciclo % 30 == 0:
+                _verificar_resultados_senales()
 
             # ============================================================
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
