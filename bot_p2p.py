@@ -181,6 +181,60 @@ CONFIG = {
     "default_crypto": _config_local.get("default_crypto", os.getenv("DEFAULT_CRYPTO", "USDT")),
 }
 
+WHITELIST = set()
+_whitelist_raw = os.getenv("USER_WHITELIST", "").strip()
+if _whitelist_raw:
+    for cid in _whitelist_raw.split(","):
+        cid = cid.strip()
+        if cid:
+            try:
+                WHITELIST.add(int(cid))
+            except ValueError:
+                pass
+CONFIG_POR_CHAT = {}
+
+def _es_master(chat_id):
+    return str(chat_id) == TELEGRAM_CHAT_ID
+
+def _autorizado(chat_id):
+    return _es_master(chat_id) or chat_id in WHITELIST
+
+def _get_config(chat_id):
+    base = dict(CONFIG)
+    if chat_id in CONFIG_POR_CHAT:
+        base.update(CONFIG_POR_CHAT[chat_id])
+    return base
+
+def _save_chat_config(chat_id, updates):
+    if chat_id not in CONFIG_POR_CHAT:
+        CONFIG_POR_CHAT[chat_id] = {}
+    CONFIG_POR_CHAT[chat_id].update(updates)
+    try:
+        with open("config_por_chat.json", "w") as f:
+            json.dump(CONFIG_POR_CHAT, f, default=str)
+    except Exception:
+        pass
+
+def _cargar_chat_configs():
+    try:
+        if os.path.exists("config_por_chat.json"):
+            with open("config_por_chat.json", "r") as f:
+                data = json.load(f)
+                CONFIG_POR_CHAT.update({int(k): v for k, v in data.items()})
+    except Exception:
+        pass
+
+_cargar_chat_configs()
+
+def _broadcast(texto, parse_mode="Markdown"):
+    targets = {int(TELEGRAM_CHAT_ID)}
+    targets.update(WHITELIST)
+    for cid in targets:
+        try:
+            _tg_call("sendMessage", {"chat_id": cid, "text": texto, "parse_mode": parse_mode})
+        except Exception:
+            pass
+
 # Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
 FILTROS_MONTO = [0, 4000, 8000, 16000]
 
@@ -389,7 +443,16 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
     return result
 
 
-def _construir_teclado():
+def _construir_teclado(chat_id=None):
+    if chat_id and not _es_master(chat_id):
+        return [
+            [{"text": "\U0001F4B0 Precio", "callback_data": "precio"}],
+            [{"text": f"\u2699\ufe0f Capital (${_get_config(chat_id)['capital']:.0f})", "callback_data": "capital"},
+             {"text": f"\U0001F3AF Umbral ({_get_config(chat_id)['margen_objetivo']}%)", "callback_data": "umbral"}],
+            [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
+             {"text": "\U0001F9EE Calc", "callback_data": "calculadora"},
+             {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+        ]
     return [
         [{"text": "\U0001F4B0 Precio", "callback_data": "precio"},
          {"text": "\U0001F500 Combo", "callback_data": "combo"},
@@ -410,14 +473,15 @@ def _construir_teclado():
 
 
 def enviar_menu(chat_id=None, texto=None):
-    cid = chat_id or TELEGRAM_CHAT_ID
+    cid = chat_id or int(TELEGRAM_CHAT_ID)
     if not texto:
+        cfg = _get_config(cid)
         texto = (
             f"\U0001F916 *Bot P2P Venezuela*\n"
-            f"Capital: ${CONFIG['capital']:.0f} | Umbral: {CONFIG['margen_objetivo']}%\n"
+            f"Capital: ${cfg['capital']:.0f} | Umbral: {cfg['margen_objetivo']}%\n"
             f"Filtro: {nombre_filtro()} | Comisiones: {COMISION_TOTAL*100:.2f}%"
         )
-    kb = json.dumps({"inline_keyboard": _construir_teclado()})
+    kb = json.dumps({"inline_keyboard": _construir_teclado(cid)})
     _tg_call("sendMessage", {
         "chat_id": cid, "text": texto,
         "parse_mode": "Markdown", "reply_markup": kb
@@ -432,7 +496,7 @@ def responder_callback(callback_id, texto=None):
 
 
 def editar_mensaje(chat_id, message_id, texto):
-    kb = json.dumps({"inline_keyboard": _construir_teclado()})
+    kb = json.dumps({"inline_keyboard": _construir_teclado(chat_id)})
     _tg_call("editMessageText", {
         "chat_id": chat_id, "message_id": message_id,
         "text": texto, "parse_mode": "Markdown", "reply_markup": kb
@@ -1329,14 +1393,21 @@ def _verificar_resultados_senales():
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
 def procesar_mensaje(texto, chat_id):
+    if not _autorizado(chat_id):
+        _tg_call("sendMessage", {"chat_id": chat_id, "text": "No tienes acceso a este bot."})
+        return
     estado = ESTADOS_USUARIO.get(chat_id, {})
     if estado.get("esperando") == "capital":
         try:
             nuevo = float(texto.strip())
             if nuevo > 0:
-                viejo = CONFIG["capital"]
-                CONFIG["capital"] = nuevo
-                guardar_config_local()
+                cfg = _get_config(chat_id)
+                viejo = cfg["capital"]
+                if _es_master(chat_id):
+                    CONFIG["capital"] = nuevo
+                    guardar_config_local()
+                else:
+                    _save_chat_config(chat_id, {"capital": nuevo})
                 enviar_menu(chat_id, f"Capital actualizado: ${viejo:.0f} -> ${nuevo:.0f}")
             else:
                 _tg_call("sendMessage", {"chat_id": chat_id, "text": "Debe ser mayor a 0."})
@@ -1348,10 +1419,14 @@ def procesar_mensaje(texto, chat_id):
         try:
             nuevo = float(texto.strip())
             if 0 < nuevo <= 100:
-                viejo = CONFIG["margen_objetivo"]
-                CONFIG["margen_objetivo"] = nuevo
-                guardar_config_local()
-                ALERTA_ENVIADA.clear()
+                cfg = _get_config(chat_id)
+                viejo = cfg["margen_objetivo"]
+                if _es_master(chat_id):
+                    CONFIG["margen_objetivo"] = nuevo
+                    guardar_config_local()
+                    ALERTA_ENVIADA.clear()
+                else:
+                    _save_chat_config(chat_id, {"margen_objetivo": nuevo})
                 enviar_menu(chat_id, f"Umbral actualizado: {viejo:.1f}% -> {nuevo:.1f}%")
             else:
                 _tg_call("sendMessage", {"chat_id": chat_id, "text": "Debe estar entre 0 y 100."})
@@ -1367,7 +1442,7 @@ def procesar_mensaje(texto, chat_id):
                 ESTADOS_USUARIO.pop(chat_id, None)
                 return
             venta_actual = ULTIMOS.get("USDT", {}).get("venta")
-            cap = CONFIG["capital"]
+            cap = _get_config(chat_id)["capital"]
             be = compra * (1 + COMISION_TOTAL)
             lines = [
                 f"\U0001F9EE *Calculadora P2P*",
@@ -1440,11 +1515,13 @@ def limpiar_refresh(chat_id, msg_id=None):
 
 
 def _render_precio(chat_id, msg_id):
-    asset = CONFIG.get("default_crypto", "USDT")
+    cfg = _get_config(chat_id)
+    asset = cfg.get("default_crypto", "USDT")
     r = calcular_margen(asset)
     if r:
         pri = ((r['venta'] - r['compra']) / r['compra']) * 100
-        rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+        m = _calc_margen(r['compra'], r['venta'], cfg['capital'])
+        rentable = "\u2705 RENTABLE" if m['pct'] > 0 else "\u274C NO RENTABLE"
         taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
         taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
         editar_mensaje(chat_id, msg_id,
@@ -1453,13 +1530,13 @@ def _render_precio(chat_id, msg_id):
             f"Compra Maker: {r['compra']:.2f} VES\n"
             f"Venta Maker:  {r['venta']:.2f} VES\n"
             f"Spread bruto: {pri:.2f}%\n"
-            f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
-            f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"Margen neto: *{m['pct']:+.2f}%* {rentable}\n"
+            f"Ganancia: ${m['usd']:.2f} USD | Bs.{m['neto']:.2f} \u00d7 ${cfg['capital']:.0f}\n\n"
             f"\u26A0 *MODO TAKER (Instantáneo)*\n"
             f"Compra Taker: {r['taker_compra']:.2f} VES\n"
             f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
             f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
-            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${cfg['capital']:.0f}\n\n"
             f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)")
     else:
         editar_mensaje(chat_id, msg_id, f"No se pudieron obtener precios de {asset}.")
@@ -1552,10 +1629,15 @@ def _render_detalle(chat_id, msg_id, asset):
         editar_mensaje(chat_id, msg_id, f"No se pudo obtener precio de {asset}.")
         registrar_refresh(chat_id, msg_id, f"detalle_{asset}")
         return
-    CONFIG["default_crypto"] = asset
-    guardar_config_local()
+    cfg = _get_config(chat_id)
+    if _es_master(chat_id):
+        CONFIG["default_crypto"] = asset
+        guardar_config_local()
+    else:
+        _save_chat_config(chat_id, {"default_crypto": asset})
     spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
-    rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
+    m = _calc_margen(r['compra'], r['venta'], cfg['capital'])
+    rentable = "\u2705 RENTABLE" if m['pct'] > 0 else "\u274C NO RENTABLE"
     with _ULTIMOS_LOCK:
         best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
     estrella = " \U0001F3C6" if asset == best_asset else ""
@@ -1576,13 +1658,13 @@ def _render_detalle(chat_id, msg_id, asset):
             f"Compra Maker: {r['compra']:.2f} VES\n"
             f"Venta Maker:  {r['venta']:.2f} VES\n"
             f"Spread bruto: {spread_bruto:.2f}%\n"
-            f"Margen neto: *{r['margen']:+.2f}%* {rentable}\n"
-            f"Ganancia: {_linea_ganancia(r)} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"Margen neto: *{m['pct']:+.2f}%* {rentable}\n"
+            f"Ganancia: ${m['usd']:.2f} USD | Bs.{m['neto']:.2f} \u00d7 ${cfg['capital']:.0f}\n\n"
             f"\u26A0 *MODO TAKER (Instantáneo)*\n"
             f"Compra Taker: {r['taker_compra']:.2f} VES\n"
             f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
             f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
-            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${CONFIG['capital']:.0f}\n\n"
+            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${cfg['capital']:.0f}\n\n"
             f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
             f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
         ),
@@ -1743,6 +1825,13 @@ def procesar_callback(cq):
     msg_id = cq["message"]["message_id"]
     data = cq["data"]
     responder_callback(cq["id"])
+    if not _autorizado(chat_id):
+        return
+    restringido = not _es_master(chat_id) and data in ("combo", "arbitraje", "ciclo_filtro", "dex_multired", "status", "precision", "mejor_horario", "timing_mercado")
+    if data.startswith("detalle_") and not _es_master(chat_id):
+        restringido = True
+    if restringido:
+        return
 
     if data == "precio":
         _render_precio(chat_id, msg_id)
@@ -1758,6 +1847,7 @@ def procesar_callback(cq):
         _render_detalle(chat_id, msg_id, asset)
 
     elif data == "umbral":
+        cfg = _get_config(chat_id)
         ESTADOS_USUARIO[chat_id] = {"esperando": "umbral"}
         _tg_call("sendMessage", {
             "chat_id": chat_id,
@@ -1765,10 +1855,11 @@ def procesar_callback(cq):
         })
 
     elif data == "capital":
+        cfg = _get_config(chat_id)
         ESTADOS_USUARIO[chat_id] = {"esperando": "capital"}
         _tg_call("sendMessage", {
             "chat_id": chat_id,
-            "text": f"\u2699\ufe0f Capital actual: ${CONFIG['capital']}\nResponde con el nuevo monto en USDT:"
+            "text": f"\u2699\ufe0f Capital actual: ${cfg['capital']}\nResponde con el nuevo monto en USDT:"
         })
 
     elif data == "calculadora":
@@ -1999,14 +2090,11 @@ def loop_monitoreo():
             # Notificar vencimiento VPS 5 dias antes
             if not VPS_EXPIRY_NOTIFIED and (VPS_EXPIRY - date.today()).days <= 5:
                 VPS_EXPIRY_NOTIFIED = True
-                _tg_call("sendMessage", {
-                    "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                    "text": (
-                        f"\u26A0\ufe0f *El VPS vence en {(VPS_EXPIRY - date.today()).days} d\u00edas*\n"
-                        f"Fecha: {VPS_EXPIRY}\n"
-                        f"Cancelar en Kamatera para evitar cobros."
-                    )
-                })
+                _broadcast(
+                    f"\u26A0\ufe0f *El VPS vence en {(VPS_EXPIRY - date.today()).days} d\u00edas*\n"
+                    f"Fecha: {VPS_EXPIRY}\n"
+                    f"Cancelar en Kamatera para evitar cobros."
+                )
 
             # Cambio de estado sueño -> despierto
             if activo and _ESTADO_SUENO == "dormido":
@@ -2065,15 +2153,12 @@ def loop_monitoreo():
                     ant = MARGE_ANTERIOR.get(r["asset"])
                     MARGE_ANTERIOR[r["asset"]] = r["margen"]
                     if ant is not None and ant < 0 <= r["margen"] and r["margen"] >= CONFIG["margen_objetivo"]:
-                        _tg_call("sendMessage", {
-                            "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                            "text": (
-                                f"\U0001F7E2 *RECUPERACION* {r['asset']}\n"
-                                f"Margen pasó de {ant:+.2f}% a {r['margen']:+.2f}%\n"
-                                f"Compra: {r['compra']:.2f} VES\n"
-                                f"Venta:  {r['venta']:.2f} VES"
-                            )
-                        })
+                        _broadcast(
+                            f"\U0001F7E2 *RECUPERACION* {r['asset']}\n"
+                            f"Margen pasó de {ant:+.2f}% a {r['margen']:+.2f}%\n"
+                            f"Compra: {r['compra']:.2f} VES\n"
+                            f"Venta:  {r['venta']:.2f} VES"
+                        )
 
                 if top:
                     print(f"  [debug] USDT margen={top['margen']:+.2f}% umbral={CONFIG['margen_objetivo']}% enviada={'USDT' in ALERTA_ENVIADA}", flush=True)
@@ -2130,10 +2215,7 @@ def loop_monitoreo():
                         f"{warning_msg}"
                     )
                     
-                    _tg_call("sendMessage", {
-                        "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                        "text": texto_alerta
-                    })
+                    _broadcast(texto_alerta)
                 elif top and top["margen"] < CONFIG["margen_objetivo"]:
                     ALERTA_ENVIADA.discard(top["asset"])
 
@@ -2157,10 +2239,7 @@ def loop_monitoreo():
                         last_ts = _ULTIMA_ALERTA_TIMING.get(senal, 0)
                         if time.time() - last_ts > TIMING_COOLDOWN:
                             _ULTIMA_ALERTA_TIMING[senal] = time.time()
-                            _tg_call("sendMessage", {
-                                "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                                "text": msg_senal
-                            })
+                            _broadcast(msg_senal)
                             print(f">>> SEÑAL {senal} (confianza {confianza}%) <<<", flush=True)
                             _registrar_senal_supabase({
                                 "signal_type": senal,
@@ -2201,32 +2280,26 @@ def loop_monitoreo():
                     ant = MARGE_ANTERIOR_DEX.get(nk)
                     MARGE_ANTERIOR_DEX[nk] = r["pct_neto"]
                     if ant is not None and ant < 0 <= r["pct_neto"]:
-                        _tg_call("sendMessage", {
-                            "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                            "text": (
-                                f"\U0001F7E2 *RECUPERACION DEX* {r['network']} ({r['nombre']})\n"
-                                f"Margen pasó de {ant:+.2f}% a {r['pct_neto']:+.2f}%\n"
-                                f"Spot: ${r['spot']:.2f} | DEX: ${r['dex']:.2f}"
-                            )
-                        })
+                        _broadcast(
+                            f"\U0001F7E2 *RECUPERACION DEX* {r['network']} ({r['nombre']})\n"
+                            f"Margen pasó de {ant:+.2f}% a {r['pct_neto']:+.2f}%\n"
+                            f"Spot: ${r['spot']:.2f} | DEX: ${r['dex']:.2f}"
+                        )
                     if r["pct_neto"] >= CONFIG["margen_objetivo"] and r["ganancia_neta"] > 0 and nk not in ALERTA_ENVIADA_DEX:
                         ALERTA_ENVIADA_DEX.add(nk)
-                        _tg_call("sendMessage", {
-                            "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
-                            "text": (
-                                f"\U0001F514 *ALERTA DEX MULTI-RED* ({r['network']})\n"
-                                f"Red: *{r['nombre']}* | Margen neto: *{r['pct_neto']:+.2f}%* \u2705 RENTABLE\n\n"
-                                f"\U0001F449 *Pasos:*\n"
-                                f"1\ufe0f\u20e3 Compra *{r['network']}* en Spot de Binance a *${r['spot']:.4f} USD*\n"
-                                f"2\ufe0f\u20e3 Retira a tu wallet *{r['wallet']}* (costo: ~${r['costo_retiro']:.2f})\n"
-                                f"3\ufe0f\u20e3 Vende en *{r['dex_principales']}* a *${r['dex']:.4f} USD*\n\n"
-                                f"\U0001F4C8 *Finanzas estimadas* (Capital: ${CONFIG['capital']:.0f}):\n"
-                                f"- Spread bruto: {r['pct_bruto']:+.2f}%\n"
-                                f"- Costos (retiro+swap): *${r['costos']:.2f}*\n"
-                                f"- *Ganancia Neta: ${r['ganancia_neta']:.4f} USD* ({r['pct_neto']:+.2f}%)\n"
-                                f"\n_Umbral actual: {CONFIG['margen_objetivo']}%_"
-                            )
-                        })
+                        _broadcast(
+                            f"\U0001F514 *ALERTA DEX MULTI-RED* ({r['network']})\n"
+                            f"Red: *{r['nombre']}* | Margen neto: *{r['pct_neto']:+.2f}%* \u2705 RENTABLE\n\n"
+                            f"\U0001F449 *Pasos:*\n"
+                            f"1\ufe0f\u20e3 Compra *{r['network']}* en Spot de Binance a *${r['spot']:.4f} USD*\n"
+                            f"2\ufe0f\u20e3 Retira a tu wallet *{r['wallet']}* (costo: ~${r['costo_retiro']:.2f})\n"
+                            f"3\ufe0f\u20e3 Vende en *{r['dex_principales']}* a *${r['dex']:.4f} USD*\n\n"
+                            f"\U0001F4C8 *Finanzas estimadas* (Capital: ${CONFIG['capital']:.0f}):\n"
+                            f"- Spread bruto: {r['pct_bruto']:+.2f}%\n"
+                            f"- Costos (retiro+swap): *${r['costos']:.2f}*\n"
+                            f"- *Ganancia Neta: ${r['ganancia_neta']:.4f} USD* ({r['pct_neto']:+.2f}%)\n"
+                            f"\n_Umbral actual: {CONFIG['margen_objetivo']}%_"
+                        )
                     elif r["pct_neto"] < CONFIG["margen_objetivo"]:
                         ALERTA_ENVIADA_DEX.discard(nk)
                 except Exception as e:

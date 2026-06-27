@@ -6,3 +6,4 @@ historial_precios.jsonl
 sessions/
 .env
 GUIA_BOT.md
+config_por_chat.json
