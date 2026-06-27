@@ -1692,14 +1692,54 @@ def procesar_callback(cq):
         else:
             rr = calcular_margen("USDT")
             if rr:
-                texto = (
-                    f"\U0001F4CA *Mercado USDT/VES*\n\n"
-                    f"Precio compra: {rr['compra']:.2f} VES\n"
-                    f"Precio venta: {rr['venta']:.2f} VES\n\n"
-                    f"\u23F3 Sin señal clara ahora.\n"
-                    f"Se necesitan m\u00ednimo 10 registros en las \u00faltimas 24h.\n"
-                    f"El bot monitorea y alertará autom\u00e1ticamente."
-                )
+                precios_24h_c, precios_24h_v = [], []
+                try:
+                    if os.path.exists(HISTORIAL_PATH):
+                        ahora = datetime.now(VENEZUELA_TZ)
+                        with open(HISTORIAL_PATH, "r") as f:
+                            for linea in f:
+                                try:
+                                    d = json.loads(linea)
+                                    if "USDT" not in d: continue
+                                    ts = d.get("ts", "")
+                                    if not ts: continue
+                                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                    if (ahora - dt).total_seconds() > 86400: continue
+                                    c = d["USDT"].get("compra")
+                                    v = d["USDT"].get("venta")
+                                    if c: precios_24h_c.append(float(c))
+                                    if v: precios_24h_v.append(float(v))
+                                except Exception:
+                                    continue
+                except Exception:
+                    pass
+                total = len(precios_24h_c)
+                if total < 10:
+                    texto = (
+                        f"\U0001F4CA *Mercado USDT/VES*\n\n"
+                        f"Precio compra: {rr['compra']:.2f} VES\n"
+                        f"Precio venta: {rr['venta']:.2f} VES\n\n"
+                        f"\u23F3 *Sin datos suficientes*\n"
+                        f"Solo {total}/10 registros en las \u00faltimas 24h.\n"
+                        f"Revisa en {max(1, 10-total)} min o verifica que el bot est\u00e9 corriendo."
+                    )
+                else:
+                    avg_c = sum(precios_24h_c) / total
+                    avg_v = sum(precios_24h_v) / total if precios_24h_v else avg_c
+                    desv_c = ((rr['compra'] - avg_c) / avg_c) * 100
+                    desv_v = ((rr['venta'] - avg_v) / avg_v) * 100
+                    texto = (
+                        f"\U0001F4CA *Mercado USDT/VES*\n\n"
+                        f"Precio compra: {rr['compra']:.2f} VES\n"
+                        f"Precio venta: {rr['venta']:.2f} VES\n"
+                        f"Promedio 24h: {avg_c:.2f} / {avg_v:.2f} VES\n"
+                        f"Desviaci\u00f3n compra: {desv_c:+.2f}%\n"
+                        f"Desviaci\u00f3n venta:  {desv_v:+.2f}%\n"
+                        f"Registros \u00faltimas 24h: {total}\n\n"
+                        f"\u23F3 *Sin se\u00f1al clara ahora.*\n"
+                        f"Se necesita desviaci\u00f3n \u2265{TIMING_THRESHOLD_PCT}% para generar se\u00f1al.\n"
+                        f"El bot monitorea y alertar\u00e1 autom\u00e1ticamente."
+                    )
             else:
                 texto = "No se pudo obtener el precio actual de USDT."
         kb = json.dumps({
