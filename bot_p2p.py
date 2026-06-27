@@ -893,27 +893,6 @@ def _calcular_tendencia_6h():
 # INDICADORES TECNICOS (Fase 2)
 # ============================================================
 
-def _cargar_precios_historial(max_registros=100):
-    """Carga los ultimos N precios de compra USDT del JSONL."""
-    precios = []
-    try:
-        if os.path.exists(HISTORIAL_PATH):
-            with open(HISTORIAL_PATH, "r") as f:
-                for linea in f:
-                    try:
-                        d = json.loads(linea)
-                        if "USDT" not in d:
-                            continue
-                        c = d["USDT"].get("compra")
-                        if c:
-                            precios.append(float(c))
-                    except Exception:
-                        continue
-    except Exception:
-        return []
-    return precios[-max_registros:]
-
-
 SPARK_CHARS = ["\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586", "\u2587", "\u2588"]
 
 def _sparkline(datos, ancho=20):
@@ -971,15 +950,25 @@ def _calcular_bollinger(precios, period=20, desv=2):
 
 
 def _calcular_macd(precios, fast=12, slow=26, signal=9):
-    if len(precios) < slow + signal:
+    n = len(precios)
+    if n < slow + signal:
         return None, None
-    ema_fast = _calcular_ema(precios, fast)
-    ema_slow = _calcular_ema(precios, slow)
-    if ema_fast is None or ema_slow is None:
-        return None, None
-    macd_line = ema_fast - ema_slow
-    signal_line = _calcular_ema(precios[-signal:], signal) if len(precios) >= signal else None
-    return macd_line, signal_line
+    k_fast = 2 / (fast + 1)
+    ema_fast_vals = [sum(precios[:fast]) / fast]
+    for p in precios[fast:]:
+        ema_fast_vals.append(p * k_fast + ema_fast_vals[-1] * (1 - k_fast))
+    k_slow = 2 / (slow + 1)
+    ema_slow_vals = [sum(precios[:slow]) / slow]
+    for p in precios[slow:]:
+        ema_slow_vals.append(p * k_slow + ema_slow_vals[-1] * (1 - k_slow))
+    offset = slow - fast
+    macd_vals = [ema_fast_vals[i + offset] - ema_slow_vals[i] for i in range(len(ema_slow_vals))]
+    macd_line = macd_vals[-1]
+    k_sig = 2 / (signal + 1)
+    sig_vals = [sum(macd_vals[:signal]) / signal]
+    for v in macd_vals[signal:]:
+        sig_vals.append(v * k_sig + sig_vals[-1] * (1 - k_sig))
+    return macd_line, sig_vals[-1]
 
 
 def _detectar_niveles_clave():
@@ -1426,7 +1415,8 @@ def _render_detalle(chat_id, msg_id, asset):
     guardar_config_local()
     spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
     rentable = "\u2705 RENTABLE" if r['margen'] > 0 else "\u274C NO RENTABLE"
-    best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
+    with _ULTIMOS_LOCK:
+        best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
     estrella = " \U0001F3C6" if asset == best_asset else ""
     taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
     taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
@@ -1531,6 +1521,9 @@ def _refrescar_paneles():
     for (chat_id, msg_id), info in snapshot:
         if (chat_id, msg_id) in to_del:
             continue
+        with _AUTO_REFRESH_LOCK:
+            if (chat_id, msg_id) not in AUTO_REFRESH:
+                continue
         cb_data = info["data"]
         try:
             if cb_data == "precio":
