@@ -197,11 +197,7 @@ def _es_master(chat_id):
     return str(chat_id) == TELEGRAM_CHAT_ID
 
 def _autorizado(chat_id):
-    if _es_master(chat_id):
-        return True
-    if not WHITELIST:
-        return True
-    return chat_id in WHITELIST
+    return _es_master(chat_id) or chat_id in WHITELIST
 
 def _get_config(chat_id):
     base = dict(CONFIG)
@@ -448,7 +444,7 @@ def _tg_call(method, payload=None, params=None, ignore_400=False):
 
 
 def _construir_teclado(chat_id=None):
-    if chat_id and WHITELIST and not _es_master(chat_id):
+    if chat_id and not _es_master(chat_id):
         return [
             [{"text": "\U0001F4B0 Precio", "callback_data": "precio"}],
             [{"text": f"\u2699\ufe0f Capital (${_get_config(chat_id)['capital']:.0f})", "callback_data": "capital"},
@@ -1831,8 +1827,8 @@ def procesar_callback(cq):
     responder_callback(cq["id"])
     if not _autorizado(chat_id):
         return
-    restringido = WHITELIST and not _es_master(chat_id) and data in ("combo", "arbitraje", "ciclo_filtro", "dex_multired", "status", "precision", "mejor_horario", "timing_mercado")
-    if data.startswith("detalle_") and WHITELIST and not _es_master(chat_id):
+    restringido = not _es_master(chat_id) and data in ("combo", "arbitraje", "ciclo_filtro", "dex_multired", "status", "precision", "mejor_horario", "timing_mercado")
+    if data.startswith("detalle_") and not _es_master(chat_id):
         restringido = True
     if restringido:
         return
