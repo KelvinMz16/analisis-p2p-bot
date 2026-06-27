@@ -465,7 +465,7 @@ def _construir_teclado(chat_id=None):
          [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
           {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"},
           {"text": "\U0001F4C9 Mercado", "callback_data": "timing_mercado"}],
-         [{"text": "\U0001F4CA Precision", "callback_data": "precision"},
+         [{"text": "\U0001F4CA Precisión", "callback_data": "precision"},
           {"text": "\U0001F9EE Calc", "callback_data": "calculadora"},
           {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
@@ -1703,7 +1703,7 @@ def _render_precision(chat_id, msg_id):
     horas = int(segundos // 3600)
     minutos = int((segundos % 3600) // 60)
     lines = [
-        "\U0001F4CA *Precision de Datos*",
+        "\U0001F4CA *Precisión de Datos*",
         f"Tiempo activo: {horas}h {minutos}m\n",
     ]
     for src, label in [("p2p", "Binance P2P"), ("coingecko", "CoinGecko"),
