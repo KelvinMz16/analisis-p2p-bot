@@ -67,18 +67,29 @@ def supabase_select_all():
     result = []
     def _do_select():
         try:
-            url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc&limit=10000"
-            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-            resp = requests.get(url, headers=headers, timeout=(5, 5))
-            if resp.status_code != 200:
-                print(f"[DEBUG] Supabase GET status={resp.status_code} response={resp.text[:300]}", flush=True)
-                raise RuntimeError(f"Supabase GET failed: {resp.status_code}")
-            result.append(resp.json())
+            all_data = []
+            page_size = 1000
+            offset = 0
+            while True:
+                url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?select=*&order=id.desc&limit={page_size}&offset={offset}"
+                headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+                resp = requests.get(url, headers=headers, timeout=(10, 10))
+                if resp.status_code != 200:
+                    print(f"[DEBUG] Supabase GET status={resp.status_code} response={resp.text[:300]}", flush=True)
+                    raise RuntimeError(f"Supabase GET failed: {resp.status_code}")
+                data = resp.json()
+                if not data:
+                    break
+                all_data.extend(data)
+                if len(data) < page_size:
+                    break
+                offset += page_size
+            result.append(all_data)
         except Exception as e:
             result.append(e)
     t = threading.Thread(target=_do_select, daemon=True)
     t.start()
-    t.join(6)
+    t.join(30)
     if t.is_alive():
         raise RuntimeError("Supabase select_all timeout")
     if not result:
@@ -878,6 +889,84 @@ def _calcular_tendencia_6h():
     return (n * xy_sum - x_sum * y_sum) / denom if denom else None
 
 
+# ============================================================
+# INDICADORES TECNICOS (Fase 2)
+# ============================================================
+
+def _cargar_precios_historial(max_registros=100):
+    """Carga los ultimos N precios de compra USDT del JSONL."""
+    precios = []
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d:
+                            continue
+                        c = d["USDT"].get("compra")
+                        if c:
+                            precios.append(float(c))
+                    except Exception:
+                        continue
+    except Exception:
+        return []
+    return precios[-max_registros:]
+
+
+def _calcular_sma(precios, period):
+    if len(precios) < period:
+        return None
+    return sum(precios[-period:]) / period
+
+
+def _calcular_ema(precios, period):
+    if len(precios) < period:
+        return None
+    k = 2 / (period + 1)
+    ema = sum(precios[:period]) / period
+    for p in precios[period:]:
+        ema = p * k + ema * (1 - k)
+    return ema
+
+
+def _calcular_rsi(precios, period=14):
+    if len(precios) < period + 1:
+        return None
+    ganancias, perdidas = 0, 0
+    for i in range(-period, 0):
+        diff = precios[i] - precios[i-1]
+        if diff > 0:
+            ganancias += diff
+        else:
+            perdidas -= diff
+    if perdidas == 0:
+        return 100
+    rs = (ganancias / period) / (perdidas / period)
+    return 100 - (100 / (1 + rs))
+
+
+def _calcular_bollinger(precios, period=20, desv=2):
+    if len(precios) < period:
+        return None, None, None
+    sma = sum(precios[-period:]) / period
+    var = sum((p - sma) ** 2 for p in precios[-period:]) / period
+    std = var ** 0.5
+    return sma - desv * std, sma, sma + desv * std
+
+
+def _calcular_macd(precios, fast=12, slow=26, signal=9):
+    if len(precios) < slow + signal:
+        return None, None
+    ema_fast = _calcular_ema(precios, fast)
+    ema_slow = _calcular_ema(precios, slow)
+    if ema_fast is None or ema_slow is None:
+        return None, None
+    macd_line = ema_fast - ema_slow
+    signal_line = _calcular_ema(precios[-signal:], signal) if len(precios) >= signal else None
+    return macd_line, signal_line
+
+
 def _detectar_niveles_clave():
     """Encuentra niveles de soporte (compra) y resistencia (venta) del USDT.
     Retorna (soportes, resistencias) como listas de precios."""
@@ -922,7 +1011,6 @@ def _cerca_de(precio, niveles, tolerancia=3):
 
 
 def _evaluar_senal_multicapa():
-    """Evalua todas las capas y retorna (senal, confianza, detalles, mensaje)."""
     r = calcular_margen("USDT")
     if not r:
         return None, 0, {}, None
@@ -958,59 +1046,94 @@ def _evaluar_senal_multicapa():
     avg_venta = sum(precios_venta) / len(precios_venta)
     desv_compra = ((r["compra"] - avg_compra) / avg_compra) * 100
     desv_venta = ((r["venta"] - avg_venta) / avg_venta) * 100
+
     pendiente = _calcular_tendencia_6h()
     soportes, resistencias = _detectar_niveles_clave()
     en_soporte = _cerca_de(r["compra"], soportes)
     en_resistencia = _cerca_de(r["venta"], resistencias)
 
+    rsi = _calcular_rsi(precios_compra, 14)
+    bb_low, bb_mid, bb_high = _calcular_bollinger(precios_compra, 20, 2)
+    macd_line, signal_line = _calcular_macd(precios_compra, 12, 26, 9)
+
+    precio = r["compra"]
+    toco_banda_baja = bb_low is not None and precio <= bb_low * 1.005
+    toco_banda_alta = bb_high is not None and precio >= bb_high * 0.995
+    rsi_bajo = rsi is not None and rsi < 35
+    rsi_alto = rsi is not None and rsi > 65
+    macd_arriba = macd_line is not None and signal_line is not None and macd_line > signal_line
+
     detalles = {
         "desv_compra": desv_compra, "desv_venta": desv_venta,
         "pendiente": pendiente, "en_soporte": en_soporte,
         "en_resistencia": en_resistencia, "avg_compra": avg_compra,
-        "avg_venta": avg_venta,
+        "avg_venta": avg_venta, "rsi": rsi, "bb_low": bb_low,
+        "bb_high": bb_high, "macd_arriba": macd_arriba,
     }
 
     if desv_compra <= -TIMING_THRESHOLD_PCT:
-        conf, razones = 60, ["Precio bajo vs promedio 24h"]
+        conf, razones = 50, ["Precio bajo vs promedio 24h"]
         if pendiente is not None:
             if pendiente >= -0.5:
-                conf += 15; razones.append("Tendencia estable o subiendo")
+                conf += 10; razones.append("Tendencia estable o subiendo")
             else:
                 conf -= 10; razones.append("Sigue cayendo (esperar)")
         if en_soporte:
-            conf += 15; razones.append("Cerca de soporte histórico")
+            conf += 10; razones.append("Cerca de soporte histórico")
+        if rsi_bajo:
+            conf += 10; razones.append(f"RSI bajo ({rsi:.0f}) - mercado sobrevendido")
+        if toco_banda_baja:
+            conf += 10; razones.append("Tocando banda inferior de Bollinger")
         if desv_compra <= -3:
             conf += 10; razones.append("Oportunidad fuerte (>3%)")
         if soportes:
             razones.append(f"Soporte en {soportes[0]} VES")
+
+        indicadores = ""
+        if rsi is not None: indicadores += f"\n📊 RSI(14): {rsi:.1f}"
+        if bb_low is not None: indicadores += f"\n📊 Bollinger: {bb_low:.1f} - {bb_mid:.1f} - {bb_high:.1f}"
+        if macd_line is not None: indicadores += f"\n📊 MACD: {'alcista' if macd_arriba else 'bajista'}"
+
         return ("compra", min(conf, 100), detalles,
             f"\U0001F4C9 *SEÑAL DE COMPRA* (Confianza: {min(conf,100)}%)\n"
             f"Precio compra: *{r['compra']:.2f} VES* ({desv_compra:+.2f}% vs promedio)\n"
             f"Promedio 24h: {avg_compra:.2f} VES | Venta: {r['venta']:.2f} VES\n"
             f"{'📈 Tendencia: estable o subiendo' if pendiente is None or pendiente >= -0.5 else '📉 Tendencia: sigue cayendo'}\n"
             + (f"✅ Cerca de soporte histórico ({soportes[0]} VES)" if en_soporte else "")
+            + indicadores
             + f"\nRazones: {', '.join(razones)}\n\n"
             f"\U0001F449 *Acción:* COMPRA USDT ahora para vender cuando suba.")
 
     if desv_venta >= TIMING_THRESHOLD_PCT:
-        conf, razones = 60, ["Precio alto vs promedio 24h"]
+        conf, razones = 50, ["Precio alto vs promedio 24h"]
         if pendiente is not None:
             if pendiente <= 0.5:
-                conf += 15; razones.append("Tendencia estable o bajando")
+                conf += 10; razones.append("Tendencia estable o bajando")
             else:
                 conf -= 10; razones.append("Sigue subiendo (esperar)")
         if en_resistencia:
-            conf += 15; razones.append("Cerca de resistencia histórica")
+            conf += 10; razones.append("Cerca de resistencia histórica")
+        if rsi_alto:
+            conf += 10; razones.append(f"RSI alto ({rsi:.0f}) - mercado sobrecomprado")
+        if toco_banda_alta:
+            conf += 10; razones.append("Tocando banda superior de Bollinger")
         if desv_venta >= 3:
             conf += 10; razones.append("Oportunidad fuerte (>3%)")
         if resistencias:
             razones.append(f"Resistencia en {resistencias[-1]} VES")
+
+        indicadores = ""
+        if rsi is not None: indicadores += f"\n📊 RSI(14): {rsi:.1f}"
+        if bb_high is not None: indicadores += f"\n📊 Bollinger: {bb_low:.1f} - {bb_mid:.1f} - {bb_high:.1f}"
+        if macd_line is not None: indicadores += f"\n📊 MACD: {'alcista' if macd_arriba else 'bajista'}"
+
         return ("venta", min(conf, 100), detalles,
             f"\U0001F4C8 *SEÑAL DE VENTA* (Confianza: {min(conf,100)}%)\n"
             f"Precio venta: *{r['venta']:.2f} VES* ({desv_venta:+.2f}% vs promedio)\n"
             f"Promedio 24h: {avg_venta:.2f} VES | Compra: {r['compra']:.2f} VES\n"
             f"{'📉 Tendencia: estable o bajando' if pendiente is None or pendiente <= 0.5 else '📈 Tendencia: sigue subiendo'}\n"
             + (f"✅ Cerca de resistencia histórica ({resistencias[-1]} VES)" if en_resistencia else "")
+            + indicadores
             + f"\nRazones: {', '.join(razones)}\n\n"
             f"\U0001F449 *Acción:* VENDE tus USDT ahora, el mercado está alto.")
 
