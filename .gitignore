@@ -5,3 +5,4 @@ historial_precios.jsonl
 *.session
 sessions/
 .env
+GUIA_BOT.md
