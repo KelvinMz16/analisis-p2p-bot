@@ -2036,7 +2036,7 @@ def loop_monitoreo():
                         continue
                     ant = MARGE_ANTERIOR.get(r["asset"])
                     MARGE_ANTERIOR[r["asset"]] = r["margen"]
-                    if ant is not None and ant < 0 <= r["margen"]:
+                    if ant is not None and ant < 0 <= r["margen"] and r["margen"] >= CONFIG["margen_objetivo"]:
                         _tg_call("sendMessage", {
                             "chat_id": TELEGRAM_CHAT_ID, "parse_mode": "Markdown",
                             "text": (
