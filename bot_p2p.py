@@ -1345,7 +1345,16 @@ def procesar_mensaje(texto, chat_id):
                 g_usd = g_total / pv if pv > 0 else 0
                 lines.append(f"   {pv:.2f} → {g_unit:+.2f} VES/USDT | *${g_usd:.2f} USD* ({g_total:+.2f} VES)")
             lines.append(f"\n\u2699 *Comisiones:* {COMISION_TOTAL*100:.2f}% total")
-            _tg_call("sendMessage", {"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "Markdown"})
+            kb_calc = json.dumps({
+                "inline_keyboard": [
+                    [{"text": "\U0001F519 Men\u00fa", "callback_data": "menu"},
+                     {"text": "\U0001F9EE Nueva", "callback_data": "calculadora"}]
+                ]
+            })
+            _tg_call("sendMessage", {
+                "chat_id": chat_id, "text": "\n".join(lines),
+                "parse_mode": "Markdown", "reply_markup": kb_calc
+            })
         except ValueError:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un n\u00famero, ej: 776"})
         ESTADOS_USUARIO.pop(chat_id, None)
