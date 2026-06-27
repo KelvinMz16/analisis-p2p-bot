@@ -832,10 +832,26 @@ def generar_reporte_horarios():
             f"   • Spread Promedio: {spread_bruto:+.2f}%\n"
         )
         
-    texto += (
-        f"\n💡 *Tip P2P:* En las mañanas suele haber menor volumen y precios de compra más económicos. "
-        f"En las noches suele aumentar la demanda, elevando los precios de venta."
-    )
+    spread_por_bloque = [(b, ((s['venta'] - s['compra']) / s['compra']) * 100, s) for b, s in bloque_stats.items()]
+    spread_por_bloque.sort(key=lambda x: x[1], reverse=True)
+    mejor_bloque = spread_por_bloque[0]
+    peor_bloque = spread_por_bloque[-1]
+
+    tips = []
+    tips.append(f"📍 *{mejor_bloque[0]}* tiene el spread más alto ({mejor_bloque[1]:+.2f}%) — mejor momento para operar.")
+    tips.append(f"📍 *{peor_bloque[0]}* tiene el spread más bajo ({peor_bloque[1]:+.2f}%) — menor oportunidad.")
+
+    horas_top = sorted(datos.items(), key=lambda x: x[1]['avg_compra'])[:2]
+    tips.append(f"🟢 Comprar más barato: ~{horas_top[0][0]:02d}:00 ({horas_top[0][1]['avg_compra']:.0f} VES) o {horas_top[1][0]:02d}:00 ({horas_top[1][1]['avg_compra']:.0f} VES).")
+
+    horas_mas_muestras = sorted(datos.items(), key=lambda x: x[1]['muestras'], reverse=True)[:2]
+    tips.append(f"📊 Mayor liquidez: ~{horas_mas_muestras[0][0]:02d}:00 y {horas_mas_muestras[1][0]:02d}:00 (más anuncios activos).")
+
+    horas_menos_muestras = sorted(datos.items(), key=lambda x: x[1]['muestras'])[:2]
+    if horas_menos_muestras[0][1]['muestras'] < 10:
+        tips.append(f"⚠️ Baja liquidez: ~{horas_menos_muestras[0][0]:02d}:00 (solo {horas_menos_muestras[0][1]['muestras']} muestras) — spreads pueden ser erráticos.")
+
+    texto += "\n💡 *Tips basados en datos:*\n" + "\n".join(f"• {t}" for t in tips)
     return texto
 
 
@@ -1471,10 +1487,11 @@ def _render_estado(chat_id, msg_id):
 
 def _render_dex(chat_id, msg_id):
     msg = f"🌌 *Arbitraje DEX Multi-Red* (Capital: ${CONFIG['capital']:.0f})\n\n"
-    fallos = []
+    fallos, resultados_dex = [], []
     for nk in DEX_NETWORKS:
         r = calcular_arbitraje_dex(nk)
         if r:
+            resultados_dex.append(r)
             icono = "🟢" if r["ganancia_neta"] > 0 else "🔴"
             msg += (f"{icono} *{r['network']}* ({r['nombre']})\n"
                     f"   Spot: ${r['spot']:.4f} | DEX: ${r['dex']:.4f}\n"
@@ -1489,7 +1506,20 @@ def _render_dex(chat_id, msg_id):
     if not msg.strip(" *\n"):
         msg = "⚠️ No se pudieron obtener precios de ninguna red."
     else:
-        msg += "\n_Tip: Usa el botón Operar de Phantom para hacer swap._"
+        rentables = [r for r in resultados_dex if r["ganancia_neta"] > 0]
+        mejores = sorted(resultados_dex, key=lambda x: x["pct_neto"], reverse=True)
+        tips_dex = []
+        if rentables:
+            top = max(rentables, key=lambda x: x["pct_neto"])
+            tips_dex.append(f"🟢 *{top['network']}* es la más rentable ahora ({top['pct_neto']:+.2f}%). Compra en Spot, swap en {top['dex_principales']}.")
+        if mejores and mejores[0]["pct_neto"] < 0:
+            mejores_bruto = sorted(resultados_dex, key=lambda x: x["pct_bruto"], reverse=True)
+            tips_dex.append(f"⚠️ Ninguna red supera los costos. La mejor oportunidad bruta es *{mejores_bruto[0]['network']}* ({mejores_bruto[0]['pct_bruto']:+.2f}%).")
+        if fallos:
+            tips_dex.append(f"ℹ️ Sin datos de {', '.join(fallos)} —可能是 baja liquidez en DEX o red caída.")
+        if not rentables and not fallos:
+            tips_dex.append("ℹ️ Los spreads no cubren costos de retiro+swap. Espera a que el mercado se mueva.")
+        msg += "\n💡 *Tips basados en datos:*\n" + "\n".join(f"• {t}" for t in tips_dex[:2])
     kb = json.dumps({
         "inline_keyboard": [
             [{"text": "🏠 Inicio", "callback_data": "menu"},
