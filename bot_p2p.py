@@ -37,6 +37,7 @@ def supabase_upsert(record):
         "Prefer": "return=representation",
     }
     resp = requests.post(url, json=record, headers=headers, timeout=(5, 5))
+    PRECISION["supabase"]["ok" if resp.status_code in (200, 201) else "fail"] += 1
     print(f"[Supabase] POST status={resp.status_code} body={resp.text[:200]}", flush=True)
     if resp.status_code not in (200, 201):
         print(f"[DEBUG] Supabase POST failed: {resp.text[:300]}", flush=True)
@@ -57,8 +58,10 @@ def supabase_cleanup():
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         resp = requests.delete(url, headers=headers, timeout=(5, 5))
+        if resp.status_code == 200: PRECISION["supabase"]["ok"] += 1
         print(f"[Supabase] Cleanup status={resp.status_code} deleted={len(resp.text) if resp.status_code==200 else '?'}", flush=True)
     except Exception as e:
+        PRECISION["supabase"]["fail"] += 1
         print(f"[Supabase] Cleanup error: {e}", flush=True)
 
 def supabase_select_all(ts_gte=None):
@@ -218,6 +221,16 @@ MIN_AD_AMOUNT = 100  # USD
 
 ULTIMOS = {}
 ESTADOS_USUARIO = {}
+PRECISION = {
+    "p2p": {"ok": 0, "fail": 0},
+    "coingecko": {"ok": 0, "fail": 0},
+    "dexscreener": {"ok": 0, "fail": 0},
+    "telegram": {"ok": 0, "fail": 0},
+    "supabase": {"ok": 0, "fail": 0},
+    "inicio": time.time(),
+    "ultimo_error": None,
+    "ultimo_error_ts": None,
+}
 MARGE_ANTERIOR = {}  # asset -> ultimo margen, para detectar recuperacion
 ALERTA_ENVIADA = set()  # assets con alerta ya enviada en este ciclo positivo
 ALERTA_ENVIADA_DEX = set()  # redes DEX con alerta ya enviada
@@ -329,14 +342,18 @@ def _try_url(url, data, timeout):
     for attempt in range(2):
         try:
             resp = sess.post(url, json=data, timeout=timeout)
+            PRECISION["telegram"]["ok"] += 1
             return resp.json(), None
         except Exception as e:
+            PRECISION["telegram"]["fail"] += 1
             err_str = str(e)
             if attempt == 1 and data and ('SSLError' in err_str or 'UNEXPECTED_EOF' in err_str or 'EOF occurred' in err_str):
                 try:
-                    return _raw_ssl_post(url, json_data=data, timeout=timeout), None
+                    res = _raw_ssl_post(url, json_data=data, timeout=timeout)
+                    PRECISION["telegram"]["ok"] += 1
+                    return res, None
                 except Exception:
-                    pass
+                    PRECISION["telegram"]["fail"] += 1
             if attempt < 1:
                 time.sleep(1)
     return None, "All retries failed"
@@ -382,10 +399,11 @@ def _construir_teclado():
          {"text": f"\U0001F3AF Umbral ({CONFIG['margen_objetivo']}%)", "callback_data": "umbral"}],
         [{"text": f"\U0001F6D2 Filtro: {nombre_filtro()}", "callback_data": "ciclo_filtro"},
          {"text": "\U0001F4CB Estado", "callback_data": "status"}],
-        [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
-         {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"},
-         {"text": "\U0001F4C9 Mercado", "callback_data": "timing_mercado"}],
-        [{"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+         [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
+          {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"},
+          {"text": "\U0001F4C9 Mercado", "callback_data": "timing_mercado"}],
+         [{"text": "\U0001F4CA Precision", "callback_data": "precision"},
+          {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
 
 
@@ -440,13 +458,17 @@ def obtener_precio_p2p(trade_type, asset="USDT", trans_amount=0):
         resp.raise_for_status()
         anuncios = resp.json().get("data", [])
         if len(anuncios) < 1:
+            PRECISION["p2p"]["fail"] += 1
             return None
-        # Promedio posiciones 1-3 (índices 0 a 2) para obtener el precio competitivo real del mercado
+        PRECISION["p2p"]["ok"] += 1
         start = 0
         end = min(3, len(anuncios))
         precios = [float(anuncios[i]["adv"]["price"]) for i in range(start, end)]
         return sum(precios) / len(precios) if precios else None
     except Exception as e:
+        PRECISION["p2p"]["fail"] += 1
+        PRECISION["ultimo_error"] = f"P2P/{asset}/{trade_type}: {e}"
+        PRECISION["ultimo_error_ts"] = time.time()
         print(f"[{asset}/{trade_type}] Error: {e}", flush=True)
         return None
 
@@ -503,8 +525,10 @@ def _fetch_spot_single(network_key):
             headers=HEADERS, timeout=5
         )
         resp.raise_for_status()
+        PRECISION["coingecko"]["ok"] += 1
         return float(resp.json().get(cfg["coingecko_id"], {}).get("usd", 0))
     except Exception as e:
+        PRECISION["coingecko"]["fail"] += 1
         print(f"[CoinGecko/{network_key}] Error: {e}", flush=True)
     return None
 
@@ -524,8 +548,10 @@ def _fetch_all_spot_prices():
         data = resp.json()
         _COINGECKO_CACHE["data"] = data
         _COINGECKO_CACHE["ts"] = ahora
+        PRECISION["coingecko"]["ok"] += 1
         return data
     except Exception as e:
+        PRECISION["coingecko"]["fail"] += 1
         print(f"[CoinGecko/batch] Error: {e}", flush=True)
         return _COINGECKO_CACHE["data"] or {}
 
@@ -600,9 +626,12 @@ def obtener_precio_dex(network_key):
                 best_price = price
                 best_liq = liq
         if best_price:
+            PRECISION["dexscreener"]["ok"] += 1
             print(f"  [DEX/{network_key}] DexScreener most-liquid: ${best_price:.4f} (liq: ${best_liq:.0f})", flush=True)
             return best_price
+        PRECISION["dexscreener"]["fail"] += 1
     except Exception as e:
+        PRECISION["dexscreener"]["fail"] += 1
         print(f"[DEX/{network_key}] Error: {e}", flush=True)
     return None
 
@@ -1489,6 +1518,41 @@ def _render_estado(chat_id, msg_id):
     registrar_refresh(chat_id, msg_id, "status")
 
 
+def _render_precision(chat_id, msg_id):
+    p = PRECISION
+    segundos = time.time() - p["inicio"]
+    horas = int(segundos // 3600)
+    minutos = int((segundos % 3600) // 60)
+    lines = [
+        "\U0001F4CA *Precision de Datos*",
+        f"Tiempo activo: {horas}h {minutos}m\n",
+    ]
+    for src, label in [("p2p", "Binance P2P"), ("coingecko", "CoinGecko"),
+                        ("dexscreener", "DexScreener"), ("telegram", "Telegram"),
+                        ("supabase", "Supabase")]:
+        ok = p[src]["ok"]
+        fail = p[src]["fail"]
+        total = ok + fail
+        if total > 0:
+            pct = (ok / total) * 100
+            barra = "\u2588" * int(pct / 10) + "\u2591" * (10 - int(pct / 10))
+            lines.append(f"*{label}:* {ok}/{total} ({pct:.0f}%)")
+            lines.append(f"  `{barra}`")
+        else:
+            lines.append(f"*{label}:* 0 consultas aun")
+    lines.append("")
+    ultimo_err = p.get("ultimo_error")
+    ultimo_ts = p.get("ultimo_error_ts")
+    if ultimo_err and ultimo_ts:
+        hace = int(time.time() - ultimo_ts)
+        lines.append(f"\u26A0 *Ultimo error:* hace {hace}s")
+        lines.append(f"  `{ultimo_err}`")
+    else:
+        lines.append("\u2705 Sin errores registrados")
+    editar_mensaje(chat_id, msg_id, "\n".join(lines))
+    registrar_refresh(chat_id, msg_id, "precision")
+
+
 def _render_dex(chat_id, msg_id):
     msg = f"🌌 *Arbitraje DEX Multi-Red* (Capital: ${CONFIG['capital']:.0f})\n\n"
     fallos, resultados_dex = [], []
@@ -1566,6 +1630,8 @@ def _refrescar_paneles():
                 _render_detalle(chat_id, msg_id, asset)
             elif cb_data == "status":
                 _render_estado(chat_id, msg_id)
+            elif cb_data == "precision":
+                _render_precision(chat_id, msg_id)
             elif cb_data == "dex_multired":
                 _render_dex(chat_id, msg_id)
         except Exception as e:
@@ -1711,6 +1777,9 @@ def procesar_callback(cq):
 
     elif data == "status":
         _render_estado(chat_id, msg_id)
+
+    elif data == "precision":
+        _render_precision(chat_id, msg_id)
 
     elif data == "dex_multired":
         try:
@@ -2076,9 +2145,14 @@ def loop_monitoreo():
 
             ciclo += 1
             if ciclo % 30 == 0 and mejores:
+                p2p_ok = PRECISION["p2p"]["ok"]
+                p2p_fail = PRECISION["p2p"]["fail"]
+                total_p2p = p2p_ok + p2p_fail
+                pct_p2p = (p2p_ok / total_p2p * 100) if total_p2p else 0
                 enviar_menu(texto=(
                     f"\u23F1 *Heartbeat* - {ciclo} ciclos\n"
-                    f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)"
+                    f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)\n"
+                    f"\U0001F4CA Precisi\u00f3n P2P: {pct_p2p:.0f}% ({p2p_ok}/{total_p2p})"
                 ))
             _refrescar_paneles()
         except Exception as e:
