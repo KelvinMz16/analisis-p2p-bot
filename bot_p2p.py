@@ -403,6 +403,7 @@ def _construir_teclado():
           {"text": "\U0001F4C8 Horarios", "callback_data": "mejor_horario"},
           {"text": "\U0001F4C9 Mercado", "callback_data": "timing_mercado"}],
          [{"text": "\U0001F4CA Precision", "callback_data": "precision"},
+          {"text": "\U0001F9EE Calc", "callback_data": "calculadora"},
           {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
     ]
 
@@ -1310,6 +1311,40 @@ def procesar_mensaje(texto, chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un numero, ej: 1.5"})
         ESTADOS_USUARIO.pop(chat_id, None)
         return
+    elif estado.get("esperando") == "calculadora":
+        try:
+            compra = float(texto.strip())
+            if compra <= 0:
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": "Debe ser mayor a 0."})
+                ESTADOS_USUARIO.pop(chat_id, None)
+                return
+            venta_actual = ULTIMOS.get("USDT", {}).get("venta")
+            puntos = [compra * (1 + p/100) for p in [0.5, 0.8, 1.0, 1.5, 2.0]]
+            be = compra * (1 + COMISION_TOTAL)
+            lines = [
+                f"\U0001F9EE *Calculadora P2P*",
+                f"Compra: *{compra:.2f} VES*\n",
+                f"\U0001F4CD *Punto de equilibrio:* *{be:.2f} VES*",
+                f"(m\u00ednimo para no perder, comisiones incluidas)\n",
+            ]
+            if venta_actual:
+                ganancia = venta_actual - be
+                pct = (ganancia / compra) * 100
+                icono = "\u2705" if ganancia > 0 else "\u274C"
+                lines.append(f"{icono} *Venta actual (mercado):* {venta_actual:.2f} VES")
+                lines.append(f"   Ganancia: {ganancia:+.2f} VES ({pct:+.2f}%)")
+                lines.append("")
+            lines.append("*Proyecciones:*")
+            for p in puntos:
+                g = p - be
+                gpct = (g / compra) * 100
+                lines.append(f"   Vender a {p:.2f}: {g:+.2f} VES ({gpct:+.2f}%)")
+            lines.append(f"\n\u2699 *Comisiones:* {COMISION_TOTAL*100:.2f}% total")
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "\n".join(lines), "parse_mode": "Markdown"})
+        except ValueError:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un n\u00famero, ej: 776"})
+        ESTADOS_USUARIO.pop(chat_id, None)
+        return
     enviar_menu(chat_id)
 
 
@@ -1672,6 +1707,18 @@ def procesar_callback(cq):
         _tg_call("sendMessage", {
             "chat_id": chat_id,
             "text": f"\u2699\ufe0f Capital actual: ${CONFIG['capital']}\nResponde con el nuevo monto en USDT:"
+        })
+
+    elif data == "calculadora":
+        ESTADOS_USUARIO[chat_id] = {"esperando": "calculadora"}
+        _tg_call("sendMessage", {
+            "chat_id": chat_id,
+            "text": (
+                f"\U0001F9EE *Calculadora P2P*\n\n"
+                f"Comisiones: {COMISION_TOTAL*100:.2f}%\n"
+                f"Responde con el *precio de compra* (VES):\n"
+                f"Ej: 776"
+            )
         })
 
     elif data == "historial":
