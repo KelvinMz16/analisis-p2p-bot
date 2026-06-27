@@ -247,12 +247,16 @@ ASSETS_VES = ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]
 HISTORIAL_PATH = "historial_precios.jsonl"
 
 VENEZUELA_TZ = timezone(timedelta(hours=-4))
-SLEEP_START = 0  # 12 AM
-SLEEP_END = 7    # 7 AM
+SLEEP_START = 23  # 11 PM
+SLEEP_END = 7     # 7 AM
 
 
 def en_horario():
-    return not (SLEEP_START <= datetime.now(VENEZUELA_TZ).hour < SLEEP_END)
+    hora = datetime.now(VENEZUELA_TZ).hour
+    if SLEEP_START <= SLEEP_END:
+        return not (SLEEP_START <= hora < SLEEP_END)
+    else:
+        return not (hora >= SLEEP_START or hora < SLEEP_END)
 # ============================================================
 
 
