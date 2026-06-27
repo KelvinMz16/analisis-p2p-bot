@@ -896,31 +896,83 @@ def generar_reporte_horarios():
 # SISTEMA DE SEÑALES MULTICAPA (90%+ precision objetivo)
 # ============================================================
 
+def _cargar_precios_usdt(horas=24):
+    compras, ventas = [], []
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            ahora = datetime.now(VENEZUELA_TZ)
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d: continue
+                        ts = d.get("ts", "")
+                        if not ts: continue
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        if (ahora - dt).total_seconds() > horas * 3600: continue
+                        c = d["USDT"].get("compra")
+                        v = d["USDT"].get("venta")
+                        if c: compras.append(float(c))
+                        if v: ventas.append(float(v))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+    if len(compras) >= 10:
+        return compras, ventas
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            desde = (datetime.now(VENEZUELA_TZ) - timedelta(hours=horas)).isoformat()
+            registros = supabase_select_all(ts_gte=desde)
+            for rec in registros:
+                usdt = rec.get("USDT")
+                if not isinstance(usdt, dict): continue
+                c = usdt.get("compra")
+                v = usdt.get("venta")
+                if c: compras.append(float(c))
+                if v: ventas.append(float(v))
+        except Exception as e:
+            print(f"Supabase fallback error: {e}", flush=True)
+    return compras, ventas
+
+
 def _calcular_tendencia_6h():
     """Regresion lineal simple sobre ultimas 6h de precio compra USDT.
     Retorna pendiente (positiva=subiendo, negativa=bajando) o None."""
     precios, timestamps = [], []
     try:
         if os.path.exists(HISTORIAL_PATH):
+            ahora = datetime.now(VENEZUELA_TZ)
             with open(HISTORIAL_PATH, "r") as f:
                 for linea in f:
                     try:
                         d = json.loads(linea)
-                        if "USDT" not in d:
-                            continue
+                        if "USDT" not in d: continue
                         ts = d.get("ts", "")
-                        if not ts:
-                            continue
+                        if not ts: continue
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        horas = (datetime.now(VENEZUELA_TZ) - dt).total_seconds() / 3600
-                        if horas > 6:
-                            continue
-                        compra = d["USDT"].get("compra")
-                        if compra:
-                            precios.append(float(compra))
-                            timestamps.append(horas)
+                        h = (ahora - dt).total_seconds() / 3600
+                        if h > 6: continue
+                        c = d["USDT"].get("compra")
+                        if c:
+                            precios.append(float(c))
+                            timestamps.append(h)
                     except Exception:
                         continue
+        if len(precios) < 5 and SUPABASE_URL and SUPABASE_KEY:
+            try:
+                desde = (datetime.now(VENEZUELA_TZ) - timedelta(hours=6)).isoformat()
+                registros = supabase_select_all(ts_gte=desde)
+                ahora = datetime.now(VENEZUELA_TZ)
+                for rec in registros:
+                    usdt = rec.get("USDT")
+                    if not isinstance(usdt, dict): continue
+                    c = usdt.get("compra")
+                    if c is None: continue
+                    precios.append(float(c))
+                timestamps = list(range(len(precios)))
+            except Exception as e:
+                print(f"Supabase fallback tendencia: {e}", flush=True)
     except Exception as e:
         print(f"Error calculando tendencia: {e}", flush=True)
         return None
@@ -1041,7 +1093,20 @@ def _detectar_niveles_clave():
                     except Exception:
                         continue
     except Exception:
-        return [], []
+        pass
+    if len(compras) < 20 and SUPABASE_URL and SUPABASE_KEY:
+        try:
+            desde = (datetime.now(VENEZUELA_TZ) - timedelta(days=7)).isoformat()
+            registros = supabase_select_all(ts_gte=desde)
+            for rec in registros:
+                usdt = rec.get("USDT")
+                if not isinstance(usdt, dict): continue
+                c = usdt.get("compra")
+                v = usdt.get("venta")
+                if c: compras.append(float(c))
+                if v: ventas.append(float(v))
+        except Exception as e:
+            print(f"Supabase fallback niveles: {e}", flush=True)
     if len(compras) < 20:
         return [], []
 
@@ -1064,30 +1129,7 @@ def _evaluar_senal_multicapa():
     if not r:
         return None, 0, {}, None
 
-    precios_compra, precios_venta = [], []
-    try:
-        if os.path.exists(HISTORIAL_PATH):
-            with open(HISTORIAL_PATH, "r") as f:
-                for linea in f:
-                    try:
-                        d = json.loads(linea)
-                        if "USDT" not in d:
-                            continue
-                        ts = d.get("ts", "")
-                        if not ts:
-                            continue
-                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        if (datetime.now(VENEZUELA_TZ) - dt).total_seconds() > 86400:
-                            continue
-                        c = d["USDT"].get("compra")
-                        v = d["USDT"].get("venta")
-                        if c: precios_compra.append(float(c))
-                        if v: precios_venta.append(float(v))
-                    except Exception:
-                        continue
-    except Exception as e:
-        print(f"Error historial: {e}", flush=True)
-        return None, 0, {}, None
+    precios_compra, precios_venta = _cargar_precios_usdt(24)
     if len(precios_compra) < 10 or len(precios_venta) < 10:
         return None, 0, {}, None
 
@@ -1856,27 +1898,7 @@ def procesar_callback(cq):
         else:
             rr = calcular_margen("USDT")
             if rr:
-                precios_24h_c, precios_24h_v = [], []
-                try:
-                    if os.path.exists(HISTORIAL_PATH):
-                        ahora = datetime.now(VENEZUELA_TZ)
-                        with open(HISTORIAL_PATH, "r") as f:
-                            for linea in f:
-                                try:
-                                    d = json.loads(linea)
-                                    if "USDT" not in d: continue
-                                    ts = d.get("ts", "")
-                                    if not ts: continue
-                                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                                    if (ahora - dt).total_seconds() > 86400: continue
-                                    c = d["USDT"].get("compra")
-                                    v = d["USDT"].get("venta")
-                                    if c: precios_24h_c.append(float(c))
-                                    if v: precios_24h_v.append(float(v))
-                                except Exception:
-                                    continue
-                except Exception:
-                    pass
+                precios_24h_c, precios_24h_v = _cargar_precios_usdt(24)
                 total = len(precios_24h_c)
                 if total < 10:
                     texto = (
