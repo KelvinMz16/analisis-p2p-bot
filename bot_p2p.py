@@ -914,6 +914,21 @@ def _cargar_precios_historial(max_registros=100):
     return precios[-max_registros:]
 
 
+SPARK_CHARS = ["\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586", "\u2587", "\u2588"]
+
+def _sparkline(datos, ancho=20):
+    if not datos:
+        return ""
+    if ancho < 2:
+        ancho = 2
+    sampled = datos[::max(1, len(datos)//ancho)][:ancho]
+    mn, mx = min(sampled), max(sampled)
+    if mx - mn < 0.0001:
+        return "\u2585" * len(sampled)
+    n = len(SPARK_CHARS) - 1
+    return "".join(SPARK_CHARS[min(int((v - mn) * n / (mx - mn)), n)] for v in sampled)
+
+
 def _calcular_sma(precios, period):
     if len(precios) < period:
         return None
@@ -1094,9 +1109,11 @@ def _evaluar_senal_multicapa():
         if bb_low is not None: indicadores += f"\n📊 Bollinger: {bb_low:.1f} - {bb_mid:.1f} - {bb_high:.1f}"
         if macd_line is not None: indicadores += f"\n📊 MACD: {'alcista' if macd_arriba else 'bajista'}"
 
+        spark_compra = _sparkline(precios_compra, 16)
         return ("compra", min(conf, 100), detalles,
             f"\U0001F4C9 *SEÑAL DE COMPRA* (Confianza: {min(conf,100)}%)\n"
             f"Precio compra: *{r['compra']:.2f} VES* ({desv_compra:+.2f}% vs promedio)\n"
+            f"{'  `' + spark_compra + '`' if spark_compra else ''}\n"
             f"Promedio 24h: {avg_compra:.2f} VES | Venta: {r['venta']:.2f} VES\n"
             f"{'📈 Tendencia: estable o subiendo' if pendiente is None or pendiente >= -0.5 else '📉 Tendencia: sigue cayendo'}\n"
             + (f"✅ Cerca de soporte histórico ({soportes[0]} VES)" if en_soporte else "")
@@ -1127,9 +1144,11 @@ def _evaluar_senal_multicapa():
         if bb_high is not None: indicadores += f"\n📊 Bollinger: {bb_low:.1f} - {bb_mid:.1f} - {bb_high:.1f}"
         if macd_line is not None: indicadores += f"\n📊 MACD: {'alcista' if macd_arriba else 'bajista'}"
 
+        spark_venta = _sparkline(precios_venta, 16)
         return ("venta", min(conf, 100), detalles,
             f"\U0001F4C8 *SEÑAL DE VENTA* (Confianza: {min(conf,100)}%)\n"
             f"Precio venta: *{r['venta']:.2f} VES* ({desv_venta:+.2f}% vs promedio)\n"
+            f"{'  `' + spark_venta + '`' if spark_venta else ''}\n"
             f"Promedio 24h: {avg_venta:.2f} VES | Compra: {r['compra']:.2f} VES\n"
             f"{'📉 Tendencia: estable o bajando' if pendiente is None or pendiente <= 0.5 else '📈 Tendencia: sigue subiendo'}\n"
             + (f"✅ Cerca de resistencia histórica ({resistencias[-1]} VES)" if en_resistencia else "")
@@ -1601,18 +1620,27 @@ def procesar_callback(cq):
             else:
                 primera = lineas_hoy[0]
                 ultima = lineas_hoy[-1]
+                usdt_compra = [r["USDT"]["compra"] for r in lineas_hoy if isinstance(r.get("USDT"), dict) and r["USDT"].get("compra")]
+                usdt_venta = [r["USDT"]["venta"] for r in lineas_hoy if isinstance(r.get("USDT"), dict) and r["USDT"].get("venta")]
+                usdt_margenes = [r["USDT"]["margen"] for r in lineas_hoy if isinstance(r.get("USDT"), dict) and r["USDT"].get("margen") is not None]
+
                 lines = [
                     f"\U0001F4C5 *Historial Hoy ({hoy_vet})*\n",
                     f"Desde: {primera['ts'][11:19]} VET",
                     f"Hasta: {ultima['ts'][11:19]} VET",
                     f"Total registros: {total_hoy}\n",
-                    "*Resumen USDT de Hoy*"
+                    "*USDT Hoy*"
                 ]
-                usdt_margenes = [r["USDT"]["margen"] for r in lineas_hoy if isinstance(r.get("USDT"), dict)]
+                if usdt_compra:
+                    lines.append(f"Compra: {usdt_compra[0]:.2f} → {usdt_compra[-1]:.2f} VES")
+                    lines.append(f"  `{_sparkline(usdt_compra)}`")
+                if usdt_venta:
+                    lines.append(f"Venta:  {usdt_venta[0]:.2f} → {usdt_venta[-1]:.2f} VES")
+                    lines.append(f"  `{_sparkline(usdt_venta)}`")
                 if usdt_margenes:
-                    lines.append(f"Min: {min(usdt_margenes):+.2f}%")
-                    lines.append(f"Máx: {max(usdt_margenes):+.2f}%")
-                    lines.append(f"Prom: {sum(usdt_margenes)/len(usdt_margenes):+.2f}%")
+                    lines.append(f"Margen: Min {min(usdt_margenes):+.2f}% | Máx {max(usdt_margenes):+.2f}%")
+                    lines.append(f"  Prom {sum(usdt_margenes)/len(usdt_margenes):+.2f}%")
+                    lines.append(f"  `{_sparkline(usdt_margenes)}`")
                 
                 activos_resumen = []
                 for asset in ASSETS_VES:
