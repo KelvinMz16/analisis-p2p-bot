@@ -2279,7 +2279,7 @@ def loop_monitoreo():
                     print(f"  DEX/{nk}: {r['pct_neto']:+.2f}% neto", flush=True)
                     ant = MARGE_ANTERIOR_DEX.get(nk)
                     MARGE_ANTERIOR_DEX[nk] = r["pct_neto"]
-                    if ant is not None and ant < 0 <= r["pct_neto"]:
+                    if ant is not None and ant < 0 <= r["pct_neto"] and r["pct_neto"] >= CONFIG["margen_objetivo"]:
                         _broadcast(
                             f"\U0001F7E2 *RECUPERACION DEX* {r['network']} ({r['nombre']})\n"
                             f"Margen pasó de {ant:+.2f}% a {r['pct_neto']:+.2f}%\n"
