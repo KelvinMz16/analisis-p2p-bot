@@ -1928,6 +1928,7 @@ def procesar_callback(cq):
     responder_callback(cq["id"])
     if not _autorizado(chat_id):
         return
+    limpiar_refresh(chat_id)
     restringido = not _es_master(chat_id) and data in ("combo", "arbitraje", "ciclo_filtro", "dex_multired", "status", "precision", "mejor_horario", "timing_mercado")
     if data.startswith("detalle_") and not _es_master(chat_id):
         restringido = True
