@@ -311,6 +311,14 @@ HEADERS = {
 
 URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 ASSETS_VES = ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]
+ASSETS_USD = ["USDC", "BTC", "ETH", "BNB", "SOL"]  # se muestran en USD internacional, no P2P VES
+_COINGECKO_ASSET_IDS = {
+    "USDC": "usd-coin",
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "BNB": "binancecoin",
+    "SOL": "solana",
+}
 HISTORIAL_PATH = "historial_precios.jsonl"
 
 VENEZUELA_TZ = timezone(timedelta(hours=-4))
@@ -740,6 +748,30 @@ def calcular_arbitraje_dex(network_key):
 # ============================================================
 
 
+def _obtener_precio_usd(asset):
+    """Precio spot internacional en USD via CoinGecko."""
+    cg_id = _COINGECKO_ASSET_IDS.get(asset)
+    if not cg_id:
+        return None
+    try:
+        data = _fetch_all_spot_prices()
+        price = float(data.get(cg_id, {}).get("usd", 0))
+        if price > 0:
+            return price
+        time.sleep(1)
+        resp = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd",
+            headers=HEADERS, timeout=5
+        )
+        resp.raise_for_status()
+        price = float(resp.json().get(cg_id, {}).get("usd", 0))
+        if price > 0:
+            return price
+    except Exception as e:
+        print(f"[USD/{asset}] Error: {e}", flush=True)
+    return None
+
+
 def _calc_margen(buy, sell, capital=None):
     neto = (sell - buy) - (buy * COMISION) - (sell * COMISION) - (buy * COMISION_BANCO)
     pct = (neto / buy) * 100
@@ -747,6 +779,23 @@ def _calc_margen(buy, sell, capital=None):
     return {"neto": neto, "pct": pct, "usd": cap * (pct / 100)}
 
 def calcular_margen(asset, trans_amount=None):
+    if asset in ASSETS_USD:
+        spot = _obtener_precio_usd(asset)
+        if spot is None:
+            return None
+        dex = None
+        if asset in DEX_NETWORKS:
+            dex = obtener_precio_dex(asset)
+        venta = dex if dex else spot
+        with _ULTIMOS_LOCK:
+            ULTIMOS[asset] = {"compra": spot, "venta": venta, "margen": 0.0, "moneda": "USDT"}
+        return {
+            "asset": asset, "compra": spot, "venta": venta,
+            "margen": 0.0, "ganancia_usd": 0.0, "ganancia_ves": None,
+            "moneda": "USDT", "spot": spot, "dex": dex,
+            "filtro": "Internacional"
+        }
+
     monto = trans_amount if trans_amount is not None else CONFIG["monto_filtro"]
     maker_venta = obtener_precio_p2p("BUY", asset, monto)
     maker_compra = obtener_precio_p2p("SELL", asset, monto)
@@ -759,12 +808,13 @@ def calcular_margen(asset, trans_amount=None):
     tasa_ves = ULTIMOS.get("USDT", {}).get("venta") or None
 
     with _ULTIMOS_LOCK:
-        ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": m["pct"]}
+        ULTIMOS[asset] = {"compra": maker_compra, "venta": maker_venta, "margen": m["pct"], "moneda": "VES"}
 
     return {
         "asset": asset, "compra": maker_compra, "venta": maker_venta,
         "margen": m["pct"], "ganancia_usd": m["usd"],
         "ganancia_ves": (m["usd"] * tasa_ves) if tasa_ves else None,
+        "moneda": "VES",
         "taker_compra": maker_venta, "taker_venta": maker_compra,
         "taker_margen": t["pct"], "taker_ganancia_usd": t["usd"],
         "taker_ganancia_ves": (t["usd"] * tasa_ves) if tasa_ves else None,
@@ -1519,25 +1569,37 @@ def _render_precio(chat_id, msg_id):
     asset = cfg.get("default_crypto", "USDT")
     r = calcular_margen(asset)
     if r:
-        pri = ((r['venta'] - r['compra']) / r['compra']) * 100
-        m = _calc_margen(r['compra'], r['venta'], cfg['capital'])
-        rentable = "\u2705 RENTABLE" if m['pct'] > 0 else "\u274C NO RENTABLE"
-        taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
-        taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
-        editar_mensaje(chat_id, msg_id,
-            f"\U0001F4B0 *{asset} / VES* ({r['filtro']})\n\n"
-            f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
-            f"Compra Maker: {r['compra']:.2f} VES\n"
-            f"Venta Maker:  {r['venta']:.2f} VES\n"
-            f"Spread bruto: {pri:.2f}%\n"
-            f"Margen neto: *{m['pct']:+.2f}%* {rentable}\n"
-            f"Ganancia: ${m['usd']:.2f} USD | Bs.{m['neto']:.2f} \u00d7 ${cfg['capital']:.0f}\n\n"
-            f"\u26A0 *MODO TAKER (Instantáneo)*\n"
-            f"Compra Taker: {r['taker_compra']:.2f} VES\n"
-            f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
-            f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
-            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${cfg['capital']:.0f}\n\n"
-            f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)")
+        if r.get("moneda") == "USDT":
+            dex_line = ""
+            if r.get("dex"):
+                diff = ((r["dex"] - r["compra"]) / r["compra"]) * 100
+                dex_line = f"DEX (Phantom): ${r['dex']:.4f} ({diff:+.2f}% vs spot)\n"
+            editar_mensaje(chat_id, msg_id,
+                f"\U0001F4B0 *{asset} / USDT* (Internacional)\n\n"
+                f"Spot (Binance): *${r['compra']:.4f}*\n"
+                f"{dex_line}"
+                f"\U0001F4C8 Precio internacional de referencia.\n"
+                f"No aplica arbitraje P2P.")
+        else:
+            pri = ((r['venta'] - r['compra']) / r['compra']) * 100
+            m = _calc_margen(r['compra'], r['venta'], cfg['capital'])
+            rentable = "\u2705 RENTABLE" if m['pct'] > 0 else "\u274C NO RENTABLE"
+            taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+            taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+            editar_mensaje(chat_id, msg_id,
+                f"\U0001F4B0 *{asset} / VES* ({r['filtro']})\n\n"
+                f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
+                f"Compra Maker: {r['compra']:.2f} VES\n"
+                f"Venta Maker:  {r['venta']:.2f} VES\n"
+                f"Spread bruto: {pri:.2f}%\n"
+                f"Margen neto: *{m['pct']:+.2f}%* {rentable}\n"
+                f"Ganancia: ${m['usd']:.2f} USD | Bs.{m['neto']:.2f} \u00d7 ${cfg['capital']:.0f}\n\n"
+                f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+                f"Compra Taker: {r['taker_compra']:.2f} VES\n"
+                f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
+                f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+                f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${cfg['capital']:.0f}\n\n"
+                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)")
     else:
         editar_mensaje(chat_id, msg_id, f"No se pudieron obtener precios de {asset}.")
     registrar_refresh(chat_id, msg_id, "precio")
@@ -1554,29 +1616,40 @@ def _render_arbitraje(chat_id, msg_id):
         editar_mensaje(chat_id, msg_id, "No se pudieron obtener datos.")
         registrar_refresh(chat_id, msg_id, "arbitraje")
         return
-    resultados.sort(key=lambda x: x["margen"], reverse=True)
-    best = resultados[0]
-    worst = resultados[-1] if len(resultados) > 1 else best
-    rentables = [r for r in resultados if r['margen'] > 0]
+    usd_list = [r for r in resultados if r.get("moneda") == "USDT"]
+    ves_list = [r for r in resultados if r.get("moneda") != "USDT"]
+    ves_list.sort(key=lambda x: x["margen"], reverse=True)
+    best = ves_list[0] if ves_list else (usd_list[0] if usd_list else resultados[0])
+    worst = ves_list[-1] if ves_list else (usd_list[-1] if usd_list else resultados[-1])
+    rentables = [r for r in ves_list if r['margen'] > 0]
     texto = (
         f"\U0001F4CA *Multi-cripto* ({nombre_filtro()})\n"
         f"Comisiones totales: {COMISION_TOTAL*100:.2f}%\n\n")
-    if rentables:
-        texto += f"\u2705 *{len(rentables)} RENTABLE(S):*\n"
-        for r in rentables:
-            texto += f"  {r['asset']}: {r['margen']:+.2f}% (${r['ganancia_usd']:.2f})\n"
-    else:
-        texto += "\u274C *Ninguno rentable ahora*\n"
-    texto += (
-        f"\n\U0001F3C6 *Mejor:* {best['asset']} ({best['margen']:+.2f}%)\n"
-        f"\u26A0 *Peor:* {worst['asset']} ({worst['margen']:+.2f}%)\n\n"
-        f"Selecciona para detalle y predeterminar:\n")
+    if ves_list:
+        if rentables:
+            texto += f"\u2705 *{len(rentables)} RENTABLE(S):*\n"
+            for r in rentables:
+                texto += f"  {r['asset']}: {r['margen']:+.2f}% (${r['ganancia_usd']:.2f})\n"
+        else:
+            texto += "\u274C *Ninguno rentable en VES*\n"
+        texto += f"\n\U0001F3C6 *Mejor VES:* {best['asset']} ({best['margen']:+.2f}%)\n"
+    if usd_list:
+        texto += f"\n\U0001F4B1 *Referencia USDT:*\n"
+        for r in usd_list:
+            dex_str = f" DEX: ${r['dex']:.4f}" if r.get("dex") else ""
+            texto += f"  {r['asset']}: *${r['compra']:.4f}*{dex_str}\n"
+    texto += f"\nSelecciona para detalle y predeterminar:\n"
     kb = {"inline_keyboard": []}
     for r in resultados:
-        icono = "\u2705" if r['margen'] > 0 else "\u274C"
-        label = f"{icono} {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
-        if r == best:
-            label = f"\U0001F3C6 {r['asset']} ({r['margen']:+.2f}%) ${r['ganancia_usd']:.2f}"
+        if r.get("moneda") == "USDT":
+            label = f"\U0001F4B1 {r['asset']} ${r['compra']:.4f}"
+            if r.get("dex"):
+                label += f" (DEX ${r['dex']:.4f})"
+        else:
+            icono = "\u2705" if r['margen'] > 0 else "\u274C"
+            label = f"{icono} {r['asset']} ({r['margen']:+.2f}%)"
+            if r == best:
+                label = f"\U0001F3C6 {r['asset']} ({r['margen']:+.2f}%)"
         kb["inline_keyboard"].append([{"text": label, "callback_data": f"detalle_{r['asset']}"}])
     kb["inline_keyboard"].append([{"text": "\U0001F519 Volver", "callback_data": "menu"}])
     _tg_call("editMessageText", {
@@ -1635,14 +1708,6 @@ def _render_detalle(chat_id, msg_id, asset):
         guardar_config_local()
     else:
         _save_chat_config(chat_id, {"default_crypto": asset})
-    spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
-    m = _calc_margen(r['compra'], r['venta'], cfg['capital'])
-    rentable = "\u2705 RENTABLE" if m['pct'] > 0 else "\u274C NO RENTABLE"
-    with _ULTIMOS_LOCK:
-        best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
-    estrella = " \U0001F3C6" if asset == best_asset else ""
-    taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
-    taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
     kb = json.dumps({
         "inline_keyboard": [
             [{"text": "🏠 Inicio", "callback_data": "menu"},
@@ -1650,26 +1715,52 @@ def _render_detalle(chat_id, msg_id, asset):
             [{"text": "🔄 Actualizar", "callback_data": f"detalle_{asset}"}]
         ]
     })
-    _tg_call("editMessageText", {
-        "chat_id": chat_id, "message_id": msg_id,
-        "text": (
-            f"\U0001F4B0 *{asset} / VES*{estrella} ({r['filtro']})\n\n"
-            f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
-            f"Compra Maker: {r['compra']:.2f} VES\n"
-            f"Venta Maker:  {r['venta']:.2f} VES\n"
-            f"Spread bruto: {spread_bruto:.2f}%\n"
-            f"Margen neto: *{m['pct']:+.2f}%* {rentable}\n"
-            f"Ganancia: ${m['usd']:.2f} USD | Bs.{m['neto']:.2f} \u00d7 ${cfg['capital']:.0f}\n\n"
-            f"\u26A0 *MODO TAKER (Instantáneo)*\n"
-            f"Compra Taker: {r['taker_compra']:.2f} VES\n"
-            f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
-            f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
-            f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${cfg['capital']:.0f}\n\n"
-            f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
-            f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
-        ),
-        "parse_mode": "Markdown", "reply_markup": kb
-    }, ignore_400=True)
+    if r.get("moneda") == "USDT":
+        dex_line = ""
+        if r.get("dex"):
+            diff = ((r["dex"] - r["compra"]) / r["compra"]) * 100
+            dex_line = f"DEX (Phantom): *${r['dex']:.4f}* ({diff:+.2f}% vs spot)\n"
+        _tg_call("editMessageText", {
+            "chat_id": chat_id, "message_id": msg_id,
+            "text": (
+                f"\U0001F4B0 *{asset} / USDT* (Internacional)\n\n"
+                f"Spot (Binance): *${r['compra']:.4f}*\n"
+                f"{dex_line}"
+                f"\U0001F4C8 Precio internacional de referencia.\n"
+                f"No aplica arbitraje P2P.\n\n"
+                f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
+            ),
+            "parse_mode": "Markdown", "reply_markup": kb
+        }, ignore_400=True)
+    else:
+        spread_bruto = ((r['venta'] - r['compra']) / r['compra']) * 100
+        m = _calc_margen(r['compra'], r['venta'], cfg['capital'])
+        rentable = "\u2705 RENTABLE" if m['pct'] > 0 else "\u274C NO RENTABLE"
+        with _ULTIMOS_LOCK:
+            best_asset = max(ULTIMOS.items(), key=lambda x: x[1].get("margen", -999))[0] if ULTIMOS else "USDT"
+        estrella = " \U0001F3C6" if asset == best_asset else ""
+        taker_rentable = "\u2705 RENTABLE" if r['taker_margen'] > 0 else "\u274C NO RENTABLE"
+        taker_ves_str = f" | Bs.{r['taker_ganancia_ves']:.2f}" if r.get('taker_ganancia_ves') else ""
+        _tg_call("editMessageText", {
+            "chat_id": chat_id, "message_id": msg_id,
+            "text": (
+                f"\U0001F4B0 *{asset} / VES*{estrella} ({r['filtro']})\n\n"
+                f"\U0001F4A1 *MODO MAKER (Anuncios)*\n"
+                f"Compra Maker: {r['compra']:.2f} VES\n"
+                f"Venta Maker:  {r['venta']:.2f} VES\n"
+                f"Spread bruto: {spread_bruto:.2f}%\n"
+                f"Margen neto: *{m['pct']:+.2f}%* {rentable}\n"
+                f"Ganancia: ${m['usd']:.2f} USD | Bs.{m['neto']:.2f} \u00d7 ${cfg['capital']:.0f}\n\n"
+                f"\u26A0 *MODO TAKER (Instantáneo)*\n"
+                f"Compra Taker: {r['taker_compra']:.2f} VES\n"
+                f"Venta Taker:  {r['taker_venta']:.2f} VES\n"
+                f"Margen neto: *{r['taker_margen']:+.2f}%* {taker_rentable}\n"
+                f"Ganancia: ${r['taker_ganancia_usd']:.2f} USD{taker_ves_str} \u00d7 ${cfg['capital']:.0f}\n\n"
+                f"Comisiones: -{COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n\n"
+                f"📌 *{asset}* se ha guardado como tu cripto predeterminada."
+            ),
+            "parse_mode": "Markdown", "reply_markup": kb
+        }, ignore_400=True)
     registrar_refresh(chat_id, msg_id, f"detalle_{asset}")
 
 
@@ -1682,17 +1773,27 @@ def _render_estado(chat_id, msg_id):
         f"Comisiones: {COMISION_TOTAL*100:.2f}% (Binance {COMISION*200:.1f}% + Banco {COMISION_BANCO*100:.1f}%)\n",
     ]
     rentables = 0
+    usd_assets = []
     for a in ASSETS_VES:
         u = ULTIMOS.get(a)
         if u:
-            icono = "\u2705" if u['margen'] > 0 else "\u274C"
-            lines.append(f"{icono} {a}: {u['margen']:+.2f}%")
-            if u['margen'] > 0:
-                rentables += 1
+            if u.get("moneda") == "USDT":
+                usd_assets.append(a)
+            else:
+                icono = "\u2705" if u['margen'] > 0 else "\u274C"
+                lines.append(f"{icono} {a}: {u['margen']:+.2f}%")
+                if u['margen'] > 0:
+                    rentables += 1
     if rentables > 0:
         lines.append(f"\n\U0001F4B0 *{rentables} activo(s) rentable(s)*")
     else:
-        lines.append(f"\n\u23F3 Sin oportunidades ahora")
+        lines.append(f"\n\u23F3 Sin oportunidades en VES")
+    if usd_assets:
+        lines.append(f"\n\U0001F4B1 *Referencia USDT:*")
+        for a in usd_assets:
+            u = ULTIMOS[a]
+            dex_str = f" (DEX ${u['venta']:.4f})" if u.get('venta', u['compra']) != u['compra'] else ""
+            lines.append(f"  {a}: ${u['compra']:.4f}{dex_str}")
     editar_mensaje(chat_id, msg_id, "\n".join(lines))
     registrar_refresh(chat_id, msg_id, "status")
 
@@ -1929,7 +2030,7 @@ def procesar_callback(cq):
                 
                 activos_resumen = []
                 for asset in ASSETS_VES:
-                    if asset == "USDT":
+                    if asset == "USDT" or asset in ASSETS_USD:
                         continue
                     m_asset = [r[asset]["margen"] for r in lineas_hoy if isinstance(r.get(asset), dict)]
                     if m_asset:
@@ -2113,7 +2214,11 @@ def loop_monitoreo():
                 r = calcular_margen(asset)
                 if r:
                     mejores.append(r)
-                    print(f"  {asset}: {r['margen']:+.2f}%", flush=True)
+                    if r.get("moneda") == "USDT":
+                        dex_str = f" (DEX ${r['dex']:.4f})" if r.get("dex") else ""
+                        print(f"  {asset}: USDT ${r['compra']:.4f}{dex_str}", flush=True)
+                    else:
+                        print(f"  {asset}: {r['margen']:+.2f}%", flush=True)
                 time.sleep(0.5)
 
             if mejores:
@@ -2140,12 +2245,13 @@ def loop_monitoreo():
                 continue
 
             if mejores:
-                mejores.sort(key=lambda x: x["margen"], reverse=True)
+                ves_mejores = [r for r in mejores if r.get("moneda") != "USDT"]
+                ves_mejores.sort(key=lambda x: x["margen"], reverse=True)
                 
-                # Solo alertas de USDT (USDC no es rentable según análisis)
-                estables = [r for r in mejores if r["asset"] == "USDT"]
+                # Solo alertas de USDT
+                estables = [r for r in ves_mejores if r["asset"] == "USDT"] if ves_mejores else []
                 top = estables[0] if estables else None
-                top_general = mejores[0]
+                top_general = ves_mejores[0] if ves_mejores else (mejores[0] if mejores else None)
 
                 for r in mejores:
                     if r["asset"] != "USDT":
@@ -2311,9 +2417,15 @@ def loop_monitoreo():
                 p2p_fail = PRECISION["p2p"]["fail"]
                 total_p2p = p2p_ok + p2p_fail
                 pct_p2p = (p2p_ok / total_p2p * 100) if total_p2p else 0
+                if top_general and top_general.get("moneda") == "USDT":
+                    mejor_linea = f"\U0001F4B1 Mejor USDT: {top_general['asset']} (${top_general['compra']:.4f})"
+                elif top_general:
+                    mejor_linea = f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)"
+                else:
+                    mejor_linea = ""
                 enviar_menu(texto=(
                     f"\u23F1 *Heartbeat* - {ciclo} ciclos\n"
-                    f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)\n"
+                    f"{mejor_linea}\n"
                     f"\U0001F4CA Precisi\u00f3n P2P: {pct_p2p:.0f}% ({p2p_ok}/{total_p2p})"
                 ))
             _refrescar_paneles()
