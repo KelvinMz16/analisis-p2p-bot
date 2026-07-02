@@ -394,6 +394,9 @@
       .reader-content th, .reader-content td { padding: 0.4rem 0.6rem; }
     }
   ]]></b:skin>
+
+  <!-- ADSTERRA POPUNDER -->
+  <script src="https://pl30175119.effectivecpmnetwork.com/3a/1a/57/3a1a577d6440aff9b80014149afed366.js"></script>
 </head>
 <body>
 
@@ -918,6 +921,20 @@
     </nav>
   </header>
 
+  <!-- ADSTERRA BANNER 728x90 -->
+  <div style='text-align:center; margin:20px 0;'>
+    <script>
+      atOptions = {
+        'key' : '7635b9d9847e7213e8d533a6d56c4555',
+        'format' : 'iframe',
+        'height' : 90,
+        'width' : 728,
+        'params' : {}
+      };
+    </script>
+    <script src="https://www.highperformanceformat.com/7635b9d9847e7213e8d533a6d56c4555/invoke.js"></script>
+  </div>
+
   <b:if cond='data:view.isHomepage'>
     <section class='hero-slider' id='hero-slider'>
       <div id='slider-track' style='width: 100%; height: 100%;'>
@@ -1320,6 +1337,9 @@
   </script>
 <script>
 (function(){var d={url:location.href,title:document.title,ref:document.referrer||&quot;direct&quot;,ts:Date.now()};var b=new Blob([JSON.stringify(d)],{type:&quot;application/json&quot;});navigator.sendBeacon(&quot;https://KelvinMz-admin-bots.hf.space/api/track&quot;,b)})();
-</script>
+  </script>
+
+  <!-- ADSTERRA SOCIAL BAR -->
+  <script src="https://pl30175237.effectivecpmnetwork.com/d5/9d/b0/d59db019928f1cef0eaf3006ee0439f3.js"></script>
 </body>
 </html>

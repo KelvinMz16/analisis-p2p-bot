@@ -249,15 +249,25 @@ def _obtener_tasa_bcv():
     """Obtiene la tasa BCV oficial scrapeando finanzasdigital.com."""
     import re
     try:
+        # Buscar ultimo articulo de tasa BCV en la homepage
         resp = requests.get(
-            "https://finanzasdigital.com/tasa-de-cambio-bcv/",
+            "https://finanzasdigital.com/",
             timeout=15,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         )
         if resp.status_code != 200:
             return None
-        # Buscar patron: "Tasa de Cambio BCV XX de mes de YYYY: 639,7029 Bs/USD"
-        match = re.search(r'Tasa de Cambio BCV.*?:\s*([\d.,]+)\s*Bs/USD', resp.text)
+        # Encontrar URL del ultimo articulo BCV
+        articulo_match = re.search(r'href="(https://finanzasdigital\.com/tasa-de-cambio-bcv[^"]*)"', resp.text)
+        if not articulo_match:
+            return None
+        articulo_url = articulo_match.group(1)
+        # Scrapear articulo
+        resp2 = requests.get(articulo_url, timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+        if resp2.status_code != 200:
+            return None
+        match = re.search(r'Tasa de Cambio BCV.*?:\s*([\d.,]+)\s*Bs/USD', resp2.text)
         if match:
             tasa_str = match.group(1).replace('.', '').replace(',', '.')
             return {"tasa": float(tasa_str), "updated_at": datetime.now(VENEZUELA_TZ).isoformat()}
@@ -282,8 +292,7 @@ def _verificar_spread_bcv():
             f"{emoji} *Spread BCV vs P2P*\n\n"
             f"Tasa BCV: {tasa_bcv:.2f} VES\n"
             f"USDT P2P: {usdt_p2p:.2f} VES\n"
-            f"Spread: {spread_pct:+.2f}%\n\n"
-            f"{'P2P está por encima del oficial' if spread_pct > 0 else 'P2P está por debajo del oficial'}",
+            f"Spread: {spread_pct:+.2f}%",
             parse_mode="Markdown"
           )
 
@@ -332,7 +341,7 @@ def _scrapear_subastas():
     if not mensajes:
         return
 
-    for msg_html in mensajes[-15:]:  # ultimos 15 mensajes
+    for msg_html in mensajes[-30:]:  # ultimos 30 mensajes
         msg = re.sub(r'<[^>]+>', ' ', msg_html).strip()
         msg = re.sub(r'\s+', ' ', msg)
 
@@ -340,9 +349,9 @@ def _scrapear_subastas():
         bancos_detectados = []
         for banco in ["BBVA", "BANCAMIGA", "BANCO PLAZA", "BANCO EXTERIOR", "BANCARIBE",
                        "BNC", "BANCOCENTRO", "BANCO VENEZOLANO DE CRÉDITO", "Banco Plaza",
-                       "100% BANCO", "BANCO MERCANTIL", "BANCO NACIONAL DE CRÉDITO",
+                       "100% BANCO", "BANCO MERCANTIL", "MERCANTIL", "BANCO NACIONAL DE CRÉDITO",
                        "BANCO PROVINCIAL", "BBVA PROVINCIAL", "BANCO DEL TESORO",
-                       "BANCO PLAZA", "BANCO EXTERIOR", "BDT", "BANCARIBE", "BNC"]:
+                       "BDT", "BANCAMIGA", "BANCO NACIONAL DE CRÉDITO"]:
             if banco.upper() in msg.upper():
                 bancos_detectados.append(banco)
 
@@ -358,6 +367,12 @@ def _scrapear_subastas():
             status = "cerrada"
         elif "APROBANDO" in msg or "ACREDITANDO" in msg or "PACTANDO" in msg:
             status = "procesando"
+        elif "INTERVENCION" in msg or "INTERVENCIÓN" in msg:
+            # Detectar otros estados de intervención
+            if "CONTINUA" in msg or "ABIERTA" in msg:
+                status = "activa"
+            elif "CERRADA" in msg:
+                status = "cerrada"
 
         # Extraer tasa
         tasa_match = re.search(r'(?:TASA|tasa)[:\s]*Bs\.?\s*([\d.,]+)', msg)
@@ -398,6 +413,21 @@ def _scrapear_subastas():
             elif status == "cerrada":
                 _send_channel(
                     f"🏦 *{banco}* — INTERVENCIÓN CERRADA\n"
+                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
+                    parse_mode="Markdown"
+                )
+            elif status == "procesando":
+                # Detectar tipo de proceso
+                if "APROBANDO" in msg:
+                    accion = "APROBANDO ÓRDENES"
+                elif "ACREDITANDO" in msg:
+                    accion = "ACREDITANDO ÓRDENES"
+                elif "PACTANDO" in msg:
+                    accion = "PACTANDO MONTO"
+                else:
+                    accion = "PROCESANDO"
+                _send_channel(
+                    f"🏦 *{banco}* — {accion}\n"
                     f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
                     parse_mode="Markdown"
                 )
@@ -477,7 +507,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+URL_BINANCE = f"{CLOUDFLARE_PROXY}/p2p-api"
 ASSETS_VES = ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]
 ASSETS_USD = ["USDC", "BTC", "ETH", "BNB", "SOL"]  # se muestran en USD internacional, no P2P VES
 _COINGECKO_ASSET_IDS = {
@@ -654,7 +684,7 @@ def enviar_menu(chat_id=None, texto=None):
     if not texto:
         cfg = _get_config(cid)
         texto = (
-            f"\U0001F916 *Bot P2P Venezuela*\n"
+            f"💰 *Arbitraje P2P VES*\n"
             f"Capital: ${cfg['capital']:.0f} | Umbral: {cfg['margen_objetivo']}%\n"
             f"Filtro: {nombre_filtro()} | Comisiones: {COMISION_TOTAL*100:.2f}%"
         )
@@ -1102,7 +1132,7 @@ def analizar_historico_horarios():
 def generar_reporte_horarios():
     datos = analizar_historico_horarios()
     if not datos:
-        return "⚠️ *No hay suficientes datos* históricos para realizar el análisis de horarios aún. Se necesitan al menos 24 horas de ejecución continua del bot."
+        return "⚠️ *No hay suficientes datos* históricos para realizar el análisis de horarios aún. Se necesitan al menos 24 horas de datos."
         
     # Encontrar mejores horas individuales
     mejor_maker_compra = min(datos.keys(), key=lambda h: datos[h]["avg_compra"])
@@ -1624,8 +1654,8 @@ def _resumen_diario():
     if bcv and bcv.get("tasa"):
         lines.append(f"🏦 *Tasa BCV*: {bcv['tasa']:.2f} VES/USD")
 
-    # Precios de todos los activos
-    for asset in ASSETS_VES:
+    # Precios solo USDT y USDC (criptos estables con volumen real)
+    for asset in ["USDT", "USDC"]:
         r = calcular_margen(asset)
         if not r:
             continue
@@ -1633,7 +1663,6 @@ def _resumen_diario():
             dex_str = f" | DEX: ${r['dex']:.4f}" if r.get("dex") else ""
             lines.append(f"💰 *{asset}*: ${r['compra']:.4f}{dex_str}")
         else:
-            spread = r["venta"] - r["compra"]
             spread_pct = ((r["venta"] - r["compra"]) / r["compra"]) * 100 if r["compra"] else 0
             lines.append(f"💰 *{asset}*: {r['compra']:.2f} → {r['venta']:.2f} VES (spread {spread_pct:+.2f}%)")
         time.sleep(0.3)
@@ -1652,9 +1681,7 @@ def _resumen_diario():
         emoji = "📉" if senal == "compra" else "📈"
         lines.append(f"\n{emoji} *Señal activa*: {senal.upper()} (Confianza: {confianza}%)")
     else:
-        lines.append(f"\n⏳ *Sin señal clara* — monitoreando...")
-
-    lines.append(f"\n🤖 Bot activo | Cada 60s monitoreando")
+        lines.append(f"\n⏳ *Sin señal clara* — seguimiento en curso...")
 
     msg = "\n".join(lines)
     _send_channel(msg, parse_mode="Markdown")
@@ -1667,11 +1694,11 @@ def procesar_mensaje(texto, chat_id):
     if not _autorizado(chat_id):
         _tg_call("sendMessage", {"chat_id": chat_id, "text":
             "👋 *Bienvenido a Arbitraje P2P Señales VES*\n\n"
-            "Este canal envía señales automáticas de arbitraje P2P USDT/VES.\n\n"
+            "Canal de señales de arbitraje P2P USDT/VES.\n\n"
             "📊 Señales de compra/venta con análisis técnico\n"
             "📈 Resumen diario del mercado a las 7am\n"
-            "🤖 Bot monitorea cada 60 segundos\n\n"
-            "Para acceder al bot privado, contacta al administrador.",
+            "🏦 Alertas de intervención BCV en tiempo real\n\n"
+            "Suscríbete para no perderte ninguna señal.",
             "parse_mode": "Markdown"})
         return
     estado = ESTADOS_USUARIO.get(chat_id, {})
@@ -2301,7 +2328,7 @@ def procesar_callback(cq):
         editar_mensaje(chat_id, msg_id,
             f"\U0001F6D2 *Filtro actualizado*\n"
             f"{viejo} \u27A1 {nombre_filtro()}\n\n"
-            f"El bot ahora calcula precios para ordenes de *{nombre_filtro()}*.\n"
+            f"Ahora calcula precios para ordenes de *{nombre_filtro()}*.\n"
             f"Comisiones totales: {COMISION_TOTAL*100:.2f}%"
         )
 
@@ -2370,7 +2397,7 @@ def procesar_callback(cq):
     elif data == "menu":
         limpiar_refresh(chat_id)
         editar_mensaje(chat_id, msg_id,
-            f"\U0001F916 *Bot P2P Venezuela*\n"
+            f"💰 *Arbitraje P2P VES*\n"
             f"Capital: ${CONFIG['capital']:.0f} | Umbral: {CONFIG['margen_objetivo']}%\n"
             f"Filtro: {nombre_filtro()} | Comisiones: {COMISION_TOTAL*100:.2f}%"
         )
@@ -2420,11 +2447,7 @@ def loop_monitoreo():
             # Notificar vencimiento VPS 5 dias antes
             if not VPS_EXPIRY_NOTIFIED and (VPS_EXPIRY - date.today()).days <= 5:
                 VPS_EXPIRY_NOTIFIED = True
-                _broadcast(
-                    f"\u26A0\ufe0f *El VPS vence en {(VPS_EXPIRY - date.today()).days} d\u00edas*\n"
-                    f"Fecha: {VPS_EXPIRY}\n"
-                    f"Cancelar en Kamatera para evitar cobros."
-                )
+                print(f"  ⚠️ VPS vence en {(VPS_EXPIRY - date.today()).days} dias ({VPS_EXPIRY})", flush=True)
 
             # Cambio de estado sueño -> despierto
             if activo and _ESTADO_SUENO == "dormido":
@@ -2617,26 +2640,10 @@ def loop_monitoreo():
                     ant = MARGE_ANTERIOR_DEX.get(nk)
                     MARGE_ANTERIOR_DEX[nk] = r["pct_neto"]
                     if ant is not None and ant < 0 <= r["pct_neto"] and r["pct_neto"] >= CONFIG["margen_objetivo"]:
-                        _broadcast(
-                            f"\U0001F7E2 *RECUPERACION DEX* {r['network']} ({r['nombre']})\n"
-                            f"Margen pasó de {ant:+.2f}% a {r['pct_neto']:+.2f}%\n"
-                            f"Spot: ${r['spot']:.2f} | DEX: ${r['dex']:.2f}"
-                        )
+                        print(f"  DEX/{nk} recuperado: {ant:+.2f}% -> {r['pct_neto']:+.2f}%", flush=True)
                     if r["pct_neto"] >= CONFIG["margen_objetivo"] and r["ganancia_neta"] > 0 and nk not in ALERTA_ENVIADA_DEX:
                         ALERTA_ENVIADA_DEX.add(nk)
-                        _broadcast(
-                            f"\U0001F514 *ALERTA DEX MULTI-RED* ({r['network']})\n"
-                            f"Red: *{r['nombre']}* | Margen neto: *{r['pct_neto']:+.2f}%* \u2705 RENTABLE\n\n"
-                            f"\U0001F449 *Pasos:*\n"
-                            f"1\ufe0f\u20e3 Compra *{r['network']}* en Spot de Binance a *${r['spot']:.4f} USD*\n"
-                            f"2\ufe0f\u20e3 Retira a tu wallet *{r['wallet']}* (costo: ~${r['costo_retiro']:.2f})\n"
-                            f"3\ufe0f\u20e3 Vende en *{r['dex_principales']}* a *${r['dex']:.4f} USD*\n\n"
-                            f"\U0001F4C8 *Finanzas estimadas* (Capital: ${CONFIG['capital']:.0f}):\n"
-                            f"- Spread bruto: {r['pct_bruto']:+.2f}%\n"
-                            f"- Costos (retiro+swap): *${r['costos']:.2f}*\n"
-                            f"- *Ganancia Neta: ${r['ganancia_neta']:.4f} USD* ({r['pct_neto']:+.2f}%)\n"
-                            f"\n_Umbral actual: {CONFIG['margen_objetivo']}%_"
-                        )
+                        print(f"  DEX/{nk} oportunidad: {r['pct_neto']:+.2f}%", flush=True)
                     elif r["pct_neto"] < CONFIG["margen_objetivo"]:
                         ALERTA_ENVIADA_DEX.discard(nk)
                 except Exception as e:
@@ -2658,12 +2665,14 @@ def loop_monitoreo():
                     mejor_linea = f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)"
                 else:
                     mejor_linea = ""
-                enviar_menu(texto=(
-                    f"\u23F1 *Heartbeat* - {ciclo} ciclos\n"
+                heartbeat_msg = (
+                    f"⏱ *Heartbeat* - {ciclo} ciclos\n"
                     f"{precio_linea}\n"
                     f"{mejor_linea}\n"
                     f"\U0001F4CA Precisi\u00f3n P2P: {pct_p2p:.0f}% ({p2p_ok}/{total_p2p})"
-                ))
+                )
+                enviar_menu(texto=heartbeat_msg)
+                _send_channel(heartbeat_msg)
             _refrescar_paneles()
         except Exception as e:
             print(f"Error: {e}", flush=True)

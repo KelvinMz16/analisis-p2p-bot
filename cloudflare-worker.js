@@ -37,6 +37,21 @@ async function handleRequest(request) {
     })
   }
 
+  // Binance P2P API proxy
+  if (path.startsWith('/p2p-api/')) {
+    const apiUrl = `https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search`
+    const body = await request.text()
+    const resp = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      body: body || undefined,
+    })
+    const result = await resp.text()
+    return new Response(result, {
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    })
+  }
+
   // Health check
   return new Response('OK', { headers: { 'Content-Type': 'text/plain' } })
 }
