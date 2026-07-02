@@ -1694,10 +1694,13 @@ def procesar_mensaje(texto, chat_id):
     if not _autorizado(chat_id):
         _tg_call("sendMessage", {"chat_id": chat_id, "text":
             "👋 *Bienvenido a Arbitraje P2P Señales VES*\n\n"
-            "Canal de señales de arbitraje P2P USDT/VES.\n\n"
+            "Canal de señales de arbitraje P2P USDT/USDC.\n\n"
             "📊 Señales de compra/venta con análisis técnico\n"
             "📈 Resumen diario del mercado a las 7am\n"
-            "🏦 Alertas de intervención BCV en tiempo real\n\n"
+            "🏦 Alertas de intervención BCV en tiempo real\n"
+            "💬 Discusión en grupo vinculado\n\n"
+            "⏰ *Horario de señales:* 7am - 11pm (Venezuela)\n"
+            "🌙 Modo silencioso: 11pm - 7am\n\n"
             "Suscríbete para no perderte ninguna señal.",
             "parse_mode": "Markdown"})
         return
