@@ -234,6 +234,174 @@ def _broadcast(texto, parse_mode="Markdown"):
             _tg_call("sendMessage", {"chat_id": cid, "text": texto, "parse_mode": parse_mode})
         except Exception:
             pass
+    _send_channel(texto, parse_mode)
+
+def _send_channel(texto, parse_mode="Markdown"):
+    if not TELEGRAM_CHANNEL_ID:
+        return
+    try:
+        _tg_call("sendMessage", {"chat_id": int(TELEGRAM_CHANNEL_ID), "text": texto, "parse_mode": parse_mode})
+    except Exception:
+        pass
+
+
+def _obtener_tasa_bcv():
+    """Obtiene la tasa BCV oficial scrapeando finanzasdigital.com."""
+    import re
+    try:
+        resp = requests.get(
+            "https://finanzasdigital.com/tasa-de-cambio-bcv/",
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        if resp.status_code != 200:
+            return None
+        # Buscar patron: "Tasa de Cambio BCV XX de mes de YYYY: 639,7029 Bs/USD"
+        match = re.search(r'Tasa de Cambio BCV.*?:\s*([\d.,]+)\s*Bs/USD', resp.text)
+        if match:
+            tasa_str = match.group(1).replace('.', '').replace(',', '.')
+            return {"tasa": float(tasa_str), "updated_at": datetime.now(VENEZUELA_TZ).isoformat()}
+    except Exception as e:
+        print(f"[BCV] Error scraping tasa: {e}", flush=True)
+    return None
+
+
+def _verificar_spread_bcv():
+    """Compara tasa BCV vs P2P y envía alerta si el spread es significativo."""
+    bcv = _obtener_tasa_bcv()
+    if not bcv or not bcv.get("tasa"):
+        return
+    tasa_bcv = bcv["tasa"]
+    usdt_p2p = ULTIMOS.get("USDT", {}).get("venta")
+    if not usdt_p2p:
+        return
+    spread_pct = ((usdt_p2p - tasa_bcv) / tasa_bcv) * 100
+    if abs(spread_pct) >= 5:
+        emoji = "📈" if spread_pct > 0 else "📉"
+        _send_channel(
+            f"{emoji} *Spread BCV vs P2P*\n\n"
+            f"Tasa BCV: {tasa_bcv:.2f} VES\n"
+            f"USDT P2P: {usdt_p2p:.2f} VES\n"
+            f"Spread: {spread_pct:+.2f}%\n\n"
+            f"{'P2P está por encima del oficial' if spread_pct > 0 else 'P2P está por debajo del oficial'}",
+            parse_mode="Markdown"
+          )
+
+
+# ============================================================
+# SCRAPER SUBASTAS BCV - Telegram @subastasBCV
+# ============================================================
+_SUBASTAS_ESTADO = {}  # banco -> {"status": "activa"|"cerrada", "ts": timestamp}
+_SUBASTAS_ULTIMO_SCRAPED = 0
+
+def _obtener_intervalo_subastas():
+    """Devuelve el intervalo de scraping segun la hora del dia."""
+    hora = datetime.now(VENEZUELA_TZ).hour
+    if 8 <= hora < 12:
+        return 30   # manana: cada 30 segundos
+    elif 12 <= hora < 18:
+        return 120  # tarde: cada 2 minutos
+    else:
+        return 0    # noche: no scrapear
+
+def _scrapear_subastas():
+    """Scrapea el canal publico @subastasBCV y detecta cambios de estado."""
+    global _SUBASTAS_ULTIMO_SCRAPED, _SUBASTAS_ESTADO
+    intervalo = _obtener_intervalo_subastas()
+    if intervalo == 0:
+        return  # noche: no scrapear
+    ahora = time.time()
+    if ahora - _SUBASTAS_ULTIMO_SCRAPED < intervalo:
+        return
+    _SUBASTAS_ULTIMO_SCRAPED = ahora
+
+    try:
+        resp = requests.get("https://t.me/s/subastasBCV", timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        if resp.status_code != 200:
+            return
+        html = resp.text
+    except Exception as e:
+        print(f"[Subastas] Error scraping: {e}", flush=True)
+        return
+
+    import re
+    # Buscar mensajes recientes del canal
+    mensajes = re.findall(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
+    if not mensajes:
+        return
+
+    for msg_html in mensajes[-15:]:  # ultimos 15 mensajes
+        msg = re.sub(r'<[^>]+>', ' ', msg_html).strip()
+        msg = re.sub(r'\s+', ' ', msg)
+
+        # Detectar bancos y estado
+        bancos_detectados = []
+        for banco in ["BBVA", "BANCAMIGA", "BANCO PLAZA", "BANCO EXTERIOR", "BANCARIBE",
+                       "BNC", "BANCOCENTRO", "BANCO VENEZOLANO DE CRÉDITO", "Banco Plaza",
+                       "100% BANCO", "BANCO MERCANTIL", "BANCO NACIONAL DE CRÉDITO",
+                       "BANCO PROVINCIAL", "BBVA PROVINCIAL", "BANCO DEL TESORO",
+                       "BANCO PLAZA", "BANCO EXTERIOR", "BDT", "BANCARIBE", "BNC"]:
+            if banco.upper() in msg.upper():
+                bancos_detectados.append(banco)
+
+        # Detectar estado
+        status = None
+        tasa = None
+        minimo = None
+        maximo = None
+
+        if "INTERVENCIÓN ACTIVA" in msg or "INTERVENCION ACTIVA" in msg:
+            status = "activa"
+        elif "INTERVENCIÓN CERRADA" in msg or "INTERVENCION CERRADA" in msg:
+            status = "cerrada"
+        elif "APROBANDO" in msg or "ACREDITANDO" in msg or "PACTANDO" in msg:
+            status = "procesando"
+
+        # Extraer tasa
+        tasa_match = re.search(r'(?:TASA|tasa)[:\s]*Bs\.?\s*([\d.,]+)', msg)
+        if tasa_match:
+            tasa = tasa_match.group(1).replace('.', '').replace(',', '.')
+
+        # Extraer minimo/maximo
+        min_match = re.search(r'(?:MÍNIMO|minimo)[:\s]*\$?\s*([\d.,]+)', msg)
+        max_match = re.search(r'(?:MÁXIMO|maximo)[:\s]*\$?\s*([\d.,]+)', msg)
+        if min_match:
+            minimo = min_match.group(1).replace('.', '').replace(',', '.')
+        if max_match:
+            maximo = max_match.group(1).replace('.', '').replace(',', '.')
+
+        if not bancos_detectados or not status:
+            continue
+
+        for banco in bancos_detectados:
+            prev = _SUBASTAS_ESTADO.get(banco, {})
+            if prev.get("status") == status:
+                continue  # sin cambio
+
+            _SUBASTAS_ESTADO[banco] = {"status": status, "ts": ahora}
+
+            # Enviar alerta al canal
+            if status == "activa":
+                tasa_str = f"Tasa: Bs. {tasa}" if tasa else ""
+                rango_str = ""
+                if minimo and maximo:
+                    rango_str = f"Mín: ${minimo} | Máx: ${maximo}"
+                _send_channel(
+                    f"🏦 *{banco}* — INTERVENCIÓN ACTIVA\n"
+                    f"{tasa_str}\n"
+                    f"{rango_str}\n"
+                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
+                    parse_mode="Markdown"
+                )
+            elif status == "cerrada":
+                _send_channel(
+                    f"🏦 *{banco}* — INTERVENCIÓN CERRADA\n"
+                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
+                    parse_mode="Markdown"
+                )
+
 
 # Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
 FILTROS_MONTO = [0, 4000, 8000, 16000]
@@ -340,6 +508,7 @@ def en_horario():
 # ============================================================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")
 CLOUDFLARE_PROXY = os.getenv("CLOUDFLARE_PROXY", "https://ves-arbitraje-p2p.kelvinyohan14.workers.dev").rstrip("/")
 USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
 
@@ -1439,12 +1608,71 @@ def _verificar_resultados_senales():
         tu.start()
 
 
+def _resumen_diario():
+    """Genera y envía el resumen diario del mercado al canal."""
+    ahora = datetime.now(VENEZUELA_TZ)
+    fecha = ahora.strftime("%d/%m/%Y")
+    hora = ahora.strftime("%H:%M")
+
+    lines = [
+        f"📊 *RESUMEN DIARIO — {fecha}*",
+        f"⏰ {hora} (Venezuela)\n",
+    ]
+
+    # Tasa BCV oficial
+    bcv = _obtener_tasa_bcv()
+    if bcv and bcv.get("tasa"):
+        lines.append(f"🏦 *Tasa BCV*: {bcv['tasa']:.2f} VES/USD")
+
+    # Precios de todos los activos
+    for asset in ASSETS_VES:
+        r = calcular_margen(asset)
+        if not r:
+            continue
+        if r.get("moneda") == "USDT":
+            dex_str = f" | DEX: ${r['dex']:.4f}" if r.get("dex") else ""
+            lines.append(f"💰 *{asset}*: ${r['compra']:.4f}{dex_str}")
+        else:
+            spread = r["venta"] - r["compra"]
+            spread_pct = ((r["venta"] - r["compra"]) / r["compra"]) * 100 if r["compra"] else 0
+            lines.append(f"💰 *{asset}*: {r['compra']:.2f} → {r['venta']:.2f} VES (spread {spread_pct:+.2f}%)")
+        time.sleep(0.3)
+
+    # Sparkline de USDT 24h
+    precios_c, precios_v = _cargar_precios_usdt(24)
+    if precios_c:
+        spark = _sparkline(precios_c, 20)
+        avg = sum(precios_c) / len(precios_c)
+        lines.append(f"\n📈 *Tendencia USDT 24h*: `{spark}`")
+        lines.append(f"Promedio: {avg:.2f} VES | Registros: {len(precios_c)}")
+
+    # Señal actual
+    senal, confianza, det, _ = _evaluar_senal_multicapa()
+    if senal:
+        emoji = "📉" if senal == "compra" else "📈"
+        lines.append(f"\n{emoji} *Señal activa*: {senal.upper()} (Confianza: {confianza}%)")
+    else:
+        lines.append(f"\n⏳ *Sin señal clara* — monitoreando...")
+
+    lines.append(f"\n🤖 Bot activo | Cada 60s monitoreando")
+
+    msg = "\n".join(lines)
+    _send_channel(msg, parse_mode="Markdown")
+
+
 # ============================================================
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
 def procesar_mensaje(texto, chat_id):
     if not _autorizado(chat_id):
-        _tg_call("sendMessage", {"chat_id": chat_id, "text": "No tienes acceso a este bot."})
+        _tg_call("sendMessage", {"chat_id": chat_id, "text":
+            "👋 *Bienvenido a Arbitraje P2P Señales VES*\n\n"
+            "Este canal envía señales automáticas de arbitraje P2P USDT/VES.\n\n"
+            "📊 Señales de compra/venta con análisis técnico\n"
+            "📈 Resumen diario del mercado a las 7am\n"
+            "🤖 Bot monitorea cada 60 segundos\n\n"
+            "Para acceder al bot privado, contacta al administrador.",
+            "parse_mode": "Markdown"})
         return
     estado = ESTADOS_USUARIO.get(chat_id, {})
     if estado.get("esperando") == "capital":
@@ -2201,8 +2429,8 @@ def loop_monitoreo():
             # Cambio de estado sueño -> despierto
             if activo and _ESTADO_SUENO == "dormido":
                 _ESTADO_SUENO = "despierto"
-                enviar_menu(texto="\u2600\ufe0f *Buenos d\u00edas!* Bot activo.")
-                print("  >>> Buenos dias!", flush=True)
+                _resumen_diario()
+                print("  >>> Buenos dias! Resumen diario enviado.", flush=True)
             elif not activo and _ESTADO_SUENO != "dormido":
                 _ESTADO_SUENO = "dormido"
                 print("  >>> Modo silencioso (12 AM - 7 AM)", flush=True)
@@ -2374,8 +2602,10 @@ def loop_monitoreo():
             # Verificar resultados de senales previas (cada 30 ciclos)
             if ciclo % 30 == 0:
                 _verificar_resultados_senales()
+                _verificar_spread_bcv()
+                _scrapear_subastas()
 
-            # ============================================================
+                # ============================================================
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
             # ============================================================
             for nk in DEX_NETWORKS:

@@ -1,0 +1,224 @@
+# SEO Fixes for My Linux Help Blogspot Template
+
+## Fix 1: Add JSON-LD Structured Data for Articles
+Add this BEFORE the closing `</head>` tag:
+
+```html
+<!-- Schema.org Structured Data -->
+<b:if cond='data:view.isSingleItem'>
+  <script type='application/ld+json'>
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": "<data:blog.pageTitle/>",
+    "description": "<data:blog.metaDescription/>",
+    "url": "<data:blog.url.canonical/>",
+    "datePublished": "<data:posts.first.datePublished/>",
+    "dateModified": "<data:posts.first.lastUpdated/>",
+    "author": {
+      "@type": "Person",
+      "name": "My Linux Help"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "My Linux Help",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://my-linux-help.blogspot.com/favicon.ico"
+      }
+    },
+    "mainEntityOfPage": {
+      "@type": "WebPage",
+      "@id": "<data:blog.url.canonical/>"
+    }
+  }
+  </script>
+</b:if>
+
+<b:if cond='data:view.isHomepage'>
+  <script type='application/ld+json'>
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "My Linux Help",
+    "url": "https://my-linux-help.blogspot.com/",
+    "potentialAction": {
+      "@type": "SearchAction",
+      "target": "https://my-linux-help.blogspot.com/search?q={search_term_string}",
+      "query-input": "required name=search_term_string"
+    }
+  }
+  </script>
+</b:if>
+```
+
+## Fix 2: Add Breadcrumb Schema
+```html
+<b:if cond='data:view.isSingleItem'>
+<script type='application/ld+json'>
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Inicio",
+      "item": "https://my-linux-help.blogspot.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "<data:blog.pageTitle/>",
+      "item": "<data:blog.url.canonical/>"
+    }
+  ]
+}
+</script>
+</b:if>
+```
+
+## Fix 3: Fix Meta Tags in Head Section
+Replace the current `<title>` and meta description with:
+
+```html
+<title><b:if cond='data:view.isSingleItem'><data:blog.pageTitle/> | My Linux Help<b:else/><data:blog.pageTitle/></b:if></title>
+<meta expr:content='data:blog.metaDescription ? data:blog.metaDescription : "Guías de Linux en español: tutoriales, comandos, herramientas y distribuciones para todos los niveles. Aprende Linux paso a paso."' name='description'/>
+<meta content='index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1' name='robots'/>
+<link expr:href='data:blog.url.canonical' rel='canonical'/>
+
+<!-- Open Graph / Facebook -->
+<meta expr:content='data:blog.pageTitle' property='og:title'/>
+<meta expr:content='data:blog.metaDescription ? data:blog.metaDescription : "Guías de Linux en español"' property='og:description'/>
+<meta content='website' property='og:type'/>
+<meta expr:content='data:blog.url.canonical' property='og:url'/>
+<meta content='https://my-linux-help.blogspot.com/favicon.ico' property='og:image'/>
+<meta content='My Linux Help' property='og:site_name'/>
+<meta content='es_ES' property='og:locale'/>
+
+<!-- Twitter -->
+<meta content='summary_large_image' name='twitter:card'/>
+<meta expr:content='data:blog.pageTitle' name='twitter:title'/>
+<meta expr:content='data:blog.metaDescription' name='twitter:description'/>
+
+<!-- Article specific meta -->
+<b:if cond='data:view.isSingleItem'>
+  <meta content='article' property='og:type'/>
+  <meta expr:content='data:posts.first.datePublished' property='article:published_time'/>
+  <meta expr:content='data:posts.first.lastUpdated' property='article:modified_time'/>
+  <meta content='My Linux Help' property='article:author'/>
+</b:if>
+```
+
+## Fix 4: Add hreflang for Spanish content
+```html
+<link href='https://my-linux-help.blogspot.com/' hreflang='es' rel='alternate'/>
+<link href='https://my-linux-help.blogspot.com/' hreflang='es-VE' rel='alternate'/>
+```
+
+## Fix 5: Preconnect for speed
+```html
+<link href='https://feeds.feedburner.com' rel='dns-prefetch'/>
+<link href='https://blogger.googleusercontent.com' rel='dns-prefetch'/>
+```
+
+## Fix 6: Robots.txt Configuration
+In Blogspot Dashboard:
+1. Go to Settings > Search preferences
+2. Custom robots.txt - paste:
+
+```
+User-agent: *
+Allow: /
+Disallow: /search
+Disallow: /p/
+Sitemap: https://my-linux-help.blogspot.com/sitemap.xml
+```
+
+## Fix 7: Submit Sitemap
+Go to Google Search Console and submit:
+```
+https://my-linux-help.blogspot.com/sitemap.xml
+```
+
+## Fix 8: Add Article Body Schema for Posts
+In the renderView() function, when showing a single post, add this after the reader-content div:
+
+```javascript
+// Add this inside the renderView function, after setting readerContainer.innerHTML
+const articleSchema = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": matched.title,
+  "description": matched.summary,
+  "url": matched.link,
+  "datePublished": matched.date,
+  "author": {
+    "@type": "Organization",
+    "name": "My Linux Help"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "My Linux Help",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://my-linux-help.blogspot.com/favicon.ico"
+    }
+  },
+  "image": matched.thumb,
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": matched.link
+  }
+};
+
+const schemaScript = document.createElement('script');
+schemaScript.type = 'application/ld+json';
+schemaScript.textContent = JSON.stringify(articleSchema);
+document.head.appendChild(schemaScript);
+```
+
+## Fix 9: Add FAQ Schema for How-To Posts
+For tutorial posts, add FAQ structured data:
+
+```javascript
+// Add this to renderView for single posts
+if (matched.content.includes('Pregunta') || matched.content.includes('¿')) {
+  const faqSchema = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": []
+  };
+  // Parse FAQ from content
+  const faqRegex = /<h3[^>]*>(.*?)<\/h3>[\s\S]*?<p[^>]*>(.*?)<\/p>/g;
+  let match;
+  while ((match = faqRegex.exec(matched.content)) !== null) {
+    faqSchema.mainEntity.push({
+      "@type": "Question",
+      "name": match[1],
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": match[2]
+      }
+    });
+  }
+  if (faqSchema.mainEntity.length > 0) {
+    const faqScript = document.createElement('script');
+    faqScript.type = 'application/ld+json';
+    faqScript.textContent = JSON.stringify(faqSchema);
+    document.head.appendChild(faqScript);
+  }
+}
+```
+
+## Fix 10: Performance - Lazy Load Images
+The images already have `loading="lazy"` which is good. Make sure all images have alt text.
+
+## Summary of Changes Needed:
+1. Add JSON-LD structured data (BlogPosting, WebSite, BreadcrumbList)
+2. Fix meta tags (robots, OG, Twitter)
+3. Add hreflang
+4. Configure robots.txt in Blogspot settings
+5. Submit sitemap to Google Search Console
+6. Add Article schema dynamically for posts
+7. Add FAQ schema for tutorial posts
