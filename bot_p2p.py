@@ -508,7 +508,7 @@ HEADERS = {
 }
 
 CLOUDFLARE_PROXY = os.getenv("CLOUDFLARE_PROXY", "https://ves-arbitraje-p2p.kelvinyohan14.workers.dev").rstrip("/")
-URL_BINANCE = f"{CLOUDFLARE_PROXY}/p2p-api"
+URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 ASSETS_VES = ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]
 ASSETS_USD = ["USDC", "BTC", "ETH", "BNB", "SOL"]  # se muestran en USD internacional, no P2P VES
 _COINGECKO_ASSET_IDS = {
