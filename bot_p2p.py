@@ -507,6 +507,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+CLOUDFLARE_PROXY = os.getenv("CLOUDFLARE_PROXY", "https://ves-arbitraje-p2p.kelvinyohan14.workers.dev").rstrip("/")
 URL_BINANCE = f"{CLOUDFLARE_PROXY}/p2p-api"
 ASSETS_VES = ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]
 ASSETS_USD = ["USDC", "BTC", "ETH", "BNB", "SOL"]  # se muestran en USD internacional, no P2P VES
@@ -539,7 +540,6 @@ def en_horario():
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")
-CLOUDFLARE_PROXY = os.getenv("CLOUDFLARE_PROXY", "https://ves-arbitraje-p2p.kelvinyohan14.workers.dev").rstrip("/")
 USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
 
 _PROXY_HTTP = CLOUDFLARE_PROXY
