@@ -227,13 +227,6 @@ def _cargar_chat_configs():
 _cargar_chat_configs()
 
 def _broadcast(texto, parse_mode="Markdown"):
-    targets = {int(TELEGRAM_CHAT_ID)}
-    targets.update(WHITELIST)
-    for cid in targets:
-        try:
-            _tg_call("sendMessage", {"chat_id": cid, "text": texto, "parse_mode": parse_mode})
-        except Exception:
-            pass
     _send_channel(texto, parse_mode)
 
 def _send_channel(texto, parse_mode="Markdown"):
@@ -473,6 +466,7 @@ MIN_AD_AMOUNT = 100  # USD
 
 ULTIMOS = {}
 ESTADOS_USUARIO = {}
+BIENVENIDA_ENVIADA = set()  # chat_ids que ya recibieron bienvenida
 PRECISION = {
     "p2p": {"ok": 0, "fail": 0},
     "coingecko": {"ok": 0, "fail": 0},
@@ -1692,17 +1686,19 @@ def _resumen_diario():
 # ============================================================
 def procesar_mensaje(texto, chat_id):
     if not _autorizado(chat_id):
-        _tg_call("sendMessage", {"chat_id": chat_id, "text":
-            "👋 *Bienvenido a Arbitraje P2P Señales VES*\n\n"
-            "Canal de señales de arbitraje P2P USDT/USDC.\n\n"
-            "📊 Señales de compra/venta con análisis técnico\n"
-            "📈 Resumen diario del mercado a las 7am\n"
-            "🏦 Alertas de intervención BCV en tiempo real\n"
-            "💬 Discusión en grupo vinculado\n\n"
-            "⏰ *Horario de señales:* 7am - 11pm (Venezuela)\n"
-            "🌙 Modo silencioso: 11pm - 7am\n\n"
-            "Suscríbete para no perderte ninguna señal.",
-            "parse_mode": "Markdown"})
+        if chat_id not in BIENVENIDA_ENVIADA:
+            BIENVENIDA_ENVIADA.add(chat_id)
+            _tg_call("sendMessage", {"chat_id": chat_id, "text":
+                "👋 *Bienvenido a Arbitraje P2P Señales VES*\n\n"
+                "Canal de señales de arbitraje P2P USDT/USDC.\n\n"
+                "📊 Señales de compra/venta con análisis técnico\n"
+                "📈 Resumen diario del mercado a las 7am\n"
+                "🏦 Alertas de intervención BCV en tiempo real\n"
+                "💬 Discusión en grupo vinculado\n\n"
+                "⏰ *Horario de señales:* 7am - 11pm (Venezuela)\n"
+                "🌙 Modo silencioso: 11pm - 7am\n\n"
+                "Suscríbete para no perderte ninguna señal.",
+                "parse_mode": "Markdown"})
         return
     estado = ESTADOS_USUARIO.get(chat_id, {})
     if estado.get("esperando") == "capital":
