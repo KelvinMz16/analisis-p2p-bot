@@ -2413,11 +2413,15 @@ def loop_monitoreo():
                     print(f"Error DEX/{nk}: {e}", flush=True)
 
             ciclo += 1
-            if ciclo % 30 == 0 and mejores:
+            if ciclo % 60 == 0 and mejores:
                 p2p_ok = PRECISION["p2p"]["ok"]
                 p2p_fail = PRECISION["p2p"]["fail"]
                 total_p2p = p2p_ok + p2p_fail
                 pct_p2p = (p2p_ok / total_p2p * 100) if total_p2p else 0
+                usdt_heart = ULTIMOS.get("USDT", {})
+                precio_linea = ""
+                if usdt_heart.get("compra"):
+                    precio_linea = f"\U0001F4B0 USDT: {usdt_heart['compra']:.2f} / {usdt_heart['venta']:.2f} VES"
                 if top_general and top_general.get("moneda") == "USDT":
                     mejor_linea = f"\U0001F4B1 Mejor USDT: {top_general['asset']} (${top_general['compra']:.4f})"
                 elif top_general:
@@ -2426,6 +2430,7 @@ def loop_monitoreo():
                     mejor_linea = ""
                 enviar_menu(texto=(
                     f"\u23F1 *Heartbeat* - {ciclo} ciclos\n"
+                    f"{precio_linea}\n"
                     f"{mejor_linea}\n"
                     f"\U0001F4CA Precisi\u00f3n P2P: {pct_p2p:.0f}% ({p2p_ok}/{total_p2p})"
                 ))
