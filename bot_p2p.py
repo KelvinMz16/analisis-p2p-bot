@@ -333,10 +333,10 @@ def _obtener_intervalo_subastas():
     hora = datetime.now(VENEZUELA_TZ).hour
     if 7 <= hora < 12:
         return 5    # manana: cada 5 segundos
-    elif 12 <= hora < 18:
-        return 120  # tarde: cada 2 minutos
+    elif 12 <= hora < 23:
+        return 120  # tarde/noche: cada 2 minutos
     else:
-        return 0    # noche: no scrapear
+        return 0    # 11pm-7am: no scrapear
 
 def _scrapear_subastas():
     """Scrapea el canal publico @subastasBCV y detecta cambios de estado."""
@@ -431,6 +431,9 @@ def _scrapear_subastas():
             status = "cerrada"
             accion = "INTERVENCIÓN CERRADA"
         # Procesamiento de órdenes
+        elif "RECHAZANDO" in msg_upper:
+            status = "procesando"
+            accion = "RECHAZANDO ÓRDENES"
         elif "APROBANDO" in msg_upper:
             status = "procesando"
             accion = "APROBANDO ÓRDENES"
@@ -440,6 +443,13 @@ def _scrapear_subastas():
         elif "PACTANDO" in msg_upper:
             status = "procesando"
             accion = "PACTANDO MONTO"
+        # Noticias bancarias / BCV
+        elif "BCV" in msg_upper and ("INTERVENCION" in msg_upper or "TASA" in msg_upper or "PUBLICA" in msg_upper):
+            status = "noticia"
+            accion = "NOTICIA BCV"
+        elif "BANCO" in msg_upper and ("NUEVO" in msg_upper or "OPCIONES" in msg_upper or "AÑADE" in msg_upper):
+            status = "noticia"
+            accion = "NOTICIA BANCARIA"
 
         # Extraer tasa
         tasa_match = re.search(r'(?:TASA|tasa)[:\s]*Bs\.?\s*([\d.,]+)', msg)
@@ -459,8 +469,8 @@ def _scrapear_subastas():
 
         for banco in bancos_detectados:
             prev = _SUBASTAS_ESTADO.get(banco, {})
-            # Para procesando, siempre enviar (ACREDITANDO, APROBANDO, etc)
-            if prev.get("status") == status and status != "procesando":
+            # Para procesando y noticia, siempre enviar
+            if prev.get("status") == status and status not in ("procesando", "noticia"):
                 continue
             print(f"[Subastas] {banco} -> {status}", flush=True)
 
@@ -487,6 +497,13 @@ def _scrapear_subastas():
             elif status == "procesando":
                 _send_channel(
                     f"🏦 *{banco}* — {accion}\n"
+                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
+                    parse_mode="Markdown"
+                )
+            elif status == "noticia":
+                _send_channel(
+                    f"📰 *{banco}* — {accion}\n"
+                    f"{msg[:200]}\n"
                     f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
                     parse_mode="Markdown"
                 )
