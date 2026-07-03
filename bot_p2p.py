@@ -316,6 +316,7 @@ def _scrapear_subastas():
     if ahora - _SUBASTAS_ULTIMO_SCRAPED < intervalo:
         return
     _SUBASTAS_ULTIMO_SCRAPED = ahora
+    print("[Subastas] Scraping...", flush=True)
 
     try:
         resp = requests.get("https://t.me/s/subastasBCV", timeout=15, headers={
@@ -388,7 +389,7 @@ def _scrapear_subastas():
         elif "INTERVENCIÓN DIGITAL ACTIVA" in msg_upper or "INTERVENCION DIGITAL ACTIVA" in msg_upper:
             status = "activa"
             accion = "INTERVENCIÓN DIGITAL ACTIVA"
-        elif "INTERVENCION ELECTRÓNICA ACTIVA" in msg_upper or "INTERVENCION ELECTRONICA ACTIVA" in msg_upper:
+        elif "INTERVENCION ELECTRÓNICA ACTIVA" in msg_upper or "INTERVENCION ELECTRONICA ACTIVA" in msg_upper or "INTERVENCIÓN ELECTRÓNICO ACTIVA" in msg_upper or "INTERVENCION ELECTRONICO ACTIVA" in msg_upper:
             status = "activa"
             accion = "INTERVENCIÓN ELECTRÓNICA ACTIVA"
         elif "CONTINUA" in msg_upper or "ABIERTA" in msg_upper:
@@ -428,6 +429,7 @@ def _scrapear_subastas():
             prev = _SUBASTAS_ESTADO.get(banco, {})
             if prev.get("status") == status:
                 continue
+            print(f"[Subastas] {banco} -> {status}", flush=True)
 
             _SUBASTAS_ESTADO[banco] = {"status": status, "ts": ahora}
 
