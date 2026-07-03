@@ -296,12 +296,37 @@ def _verificar_spread_bcv():
           )
 
 
+def _verificar_cambio_tasa_bcv():
+    """Detecta cambios en la tasa BCV y envía alerta inmediata."""
+    global _ULTIMA_TASA_BCV
+    bcv = _obtener_tasa_bcv()
+    if not bcv or not bcv.get("tasa"):
+        return
+    tasa = bcv["tasa"]
+    if _ULTIMA_TASA_BCV == 0:
+        _ULTIMA_TASA_BCV = tasa
+        return
+    if tasa != _ULTIMA_TASA_BCV:
+        cambio = tasa - _ULTIMA_TASA_BCV
+        pct = (cambio / _ULTIMA_TASA_BCV) * 100
+        emoji = "📈" if cambio > 0 else "📉"
+        _send_channel(
+            f"{emoji} *TCambio BCV*\n\n"
+            f"Tasa anterior: {_ULTIMA_TASA_BCV:.2f} VES\n"
+            f"Tasa actual: *{tasa:.2f} VES*\n"
+            f"Cambio: {cambio:+.2f} ({pct:+.2f}%)",
+            parse_mode="Markdown"
+        )
+        _ULTIMA_TASA_BCV = tasa
+
+
 # ============================================================
 # SCRAPER SUBASTAS BCV - Telegram @subastasBCV
 # ============================================================
 _SUBASTAS_ESTADO = {}  # banco -> {"status": "activa"|"cerrada", "ts": timestamp}
 _SUBASTAS_ULTIMO_SCRAPED = 0
 _ULTIMO_SPREAD_BCV = 0  # timestamp del ultimo spread enviado
+_ULTIMA_TASA_BCV = 0  # ultima tasa BCV conocida
 
 def _obtener_intervalo_subastas():
     """Devuelve el intervalo de scraping segun la hora del dia."""
@@ -2809,6 +2834,9 @@ def loop_monitoreo():
             if ciclo % 30 == 0:
                 _verificar_resultados_senales()
                 _verificar_spread_bcv()
+
+            # Detectar cambio de tasa BCV (cada ciclo)
+            _verificar_cambio_tasa_bcv()
 
             # Subastas BCV se ejecuta cada ciclo (tiene su propio intervalo interno)
             _scrapear_subastas()
