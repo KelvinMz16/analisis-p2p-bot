@@ -52,6 +52,20 @@ async function handleRequest(request) {
     })
   }
 
+  // t.me proxy (subastas scraping)
+  if (path.startsWith('/t-me/')) {
+    const subpath = path.split('/t-me/')[1]
+    const apiUrl = `https://t.me/${subpath}`
+    const resp = await fetch(apiUrl, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    })
+    const result = await resp.text()
+    return new Response(result, {
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' },
+    })
+  }
+
   // Health check
   return new Response('OK', { headers: { 'Content-Type': 'text/plain' } })
 }

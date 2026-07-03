@@ -384,14 +384,15 @@ def _scrapear_subastas():
     print("[Subastas] Scraping...", flush=True)
 
     try:
-        resp = requests.get("https://t.me/s/subastasBCV", timeout=15, headers={
+        proxy_tme = f"{CLOUDFLARE_PROXY.rstrip('/')}/t-me/s/subastasBCV"
+        resp = requests.get(proxy_tme, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
         if resp.status_code != 200:
             return
         html = resp.text
     except Exception as e:
-        print(f"[Subastas] Error scraping: {e}", flush=True)
+        print(f"[Subastas] Error scraping via proxy: {e}", flush=True)
         return
 
     import re
