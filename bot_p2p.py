@@ -444,10 +444,10 @@ def _scrapear_subastas():
             status = "procesando"
             accion = "PACTANDO MONTO"
         # Noticias bancarias / BCV
-        elif "BCV" in msg_upper and ("INTERVENCION" in msg_upper or "TASA" in msg_upper or "PUBLICA" in msg_upper):
+        elif "BCV" in msg_upper and ("INTERVENCION" in msg_upper or "TASA" in msg_upper or "PUBLICA" in msg_upper or "NOTICIA" in msg_upper or "NUEVA" in msg_upper):
             status = "noticia"
             accion = "NOTICIA BCV"
-        elif "BANCO" in msg_upper and ("NUEVO" in msg_upper or "OPCIONES" in msg_upper or "AÑADE" in msg_upper):
+        elif bancos_detectados and ("NUEVO" in msg_upper or "OPCIONES" in msg_upper or "AÑADE" in msg_upper or "HABILITA" in msg_upper or "INFORMAN" in msg_upper):
             status = "noticia"
             accion = "NOTICIA BANCARIA"
 
@@ -1789,6 +1789,18 @@ def procesar_mensaje(texto, chat_id):
         if grupo_id and str(chat_id) == grupo_id:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": _precio_p2p_resumen(), "parse_mode": "Markdown"})
         return
+    if (texto.startswith("/ayuda") or texto.startswith("/comandos")):
+        grupo_id = CONFIG.get("grupo_chat_id", "")
+        if grupo_id and str(chat_id) == grupo_id and not _es_master(chat_id):
+            _tg_call("sendMessage", {"chat_id": chat_id, "text":
+                "📋 *Comandos disponibles:*\n\n"
+                "💰 `/precio` — Precios P2P Venezuela en vivo\n"
+                "   (también: /p2p, /mercado)\n\n"
+                "🔒 *Funciones premium* próximamente.\n"
+                "   Contacta al admin para más info.",
+                "parse_mode": "Markdown"})
+            return
+        # si es master, deja que pase al /help handler privado
     if texto.startswith("/groupid"):
         if not _es_master(chat_id):
             return
@@ -1914,7 +1926,7 @@ def procesar_mensaje(texto, chat_id):
         else:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decir <mensaje>"})
         return
-    if texto.startswith("/help") or texto.startswith("/start") or texto == "/":
+    if texto.startswith("/help") or texto.startswith("/ayuda") or texto.startswith("/comandos") or texto.startswith("/start") or texto == "/":
         if not _es_master(chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Bot de señales P2P. Usa los botones del menú.", "parse_mode": "Markdown"})
             return
