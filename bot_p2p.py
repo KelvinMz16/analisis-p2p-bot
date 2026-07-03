@@ -1845,6 +1845,50 @@ def procesar_mensaje(texto, chat_id):
         else:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decir <mensaje>"})
         return
+    if texto.startswith("/ban"):
+        if not _es_master(chat_id):
+            return
+        destino = CONFIG.get("grupo_chat_id")
+        if not destino:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay grupo configurado."})
+            return
+        partes = texto.split()
+        if len(partes) < 2:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /ban <user_id> [horas]"})
+            return
+        try:
+            user_id = int(partes[1])
+            params = {"chat_id": int(destino), "user_id": user_id}
+            if len(partes) >= 3:
+                horas = float(partes[2])
+                until = int(time.time()) + int(horas * 3600)
+                params["until_date"] = until
+                _tg_call("banChatMember", params)
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Usuario `{user_id}` baneado por {horas}h.", "parse_mode": "Markdown"})
+            else:
+                _tg_call("banChatMember", params)
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Usuario `{user_id}` baneado permanentemente.", "parse_mode": "Markdown"})
+        except Exception as e:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Error al banear: {e}"})
+        return
+    if texto.startswith("/unban"):
+        if not _es_master(chat_id):
+            return
+        destino = CONFIG.get("grupo_chat_id")
+        if not destino:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay grupo configurado."})
+            return
+        partes = texto.split()
+        if len(partes) < 2:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /unban <user_id>"})
+            return
+        try:
+            user_id = int(partes[1])
+            _tg_call("unbanChatMember", {"chat_id": int(destino), "user_id": user_id, "only_if_banned": True})
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Usuario `{user_id}` desbaneado.", "parse_mode": "Markdown"})
+        except Exception as e:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Error al desbanear: {e}"})
+        return
     enviar_menu(chat_id)
 
 
