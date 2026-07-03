@@ -526,6 +526,35 @@ def nombre_filtro(valor=None):
     return f"{v} Bs"
 
 
+def _precio_p2p_resumen():
+    usdt = ULTIMOS.get("USDT", {})
+    if not usdt.get("compra"):
+        return "No hay datos disponibles."
+    precio_linea = f"💵 *USDT*: Compra {usdt['compra']:.2f} | Venta {usdt['venta']:.2f} VES"
+    spread = usdt.get("margen")
+    spread_linea = f"📊 *Spread:* {spread:+.2f}%" if spread is not None else ""
+    bcv = _obtener_tasa_bcv()
+    bcv_linea = f"🏦 *BCV:* {bcv['tasa']:.2f} VES" if bcv and bcv.get('tasa') else ""
+    mejor_asset, mejor_margen = "", -999
+    for a in ASSETS_VES:
+        r = ULTIMOS.get(a)
+        if r and r.get("margen", -999) > mejor_margen:
+            mejor_margen = r["margen"]
+            mejor_asset = a
+    mejor = f"🔥 *Más vendido:* {mejor_asset} a {ULTIMOS[mejor_asset]['venta']:.2f} VES ({mejor_margen:+.2f}%)" if mejor_asset and mejor_asset != "USDT" else ""
+    
+    oportunidad = "✅ *Hay oportunidad de arbitraje*" if spread is not None and spread >= CONFIG["margen_objetivo"] else "❌ Sin oportunidad en este momento"
+    return (
+        f"💰 *MERCADO P2P VENEZUELA*\n"
+        f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"
+        f"{precio_linea}\n"
+        f"{spread_linea}\n"
+        f"{bcv_linea}\n"
+        f"{mejor}\n\n"
+        f"{oportunidad}"
+    )
+
+
 def guardar_config_local():
     try:
         with open(CONFIG_PATH, "w") as f:
@@ -1747,8 +1776,6 @@ def _resumen_diario():
         lines.append(f"\n📊 *Spread actual USDT:* {usdt_spread:+.2f}%")
         lines.append(f"{'✅ *Hay oportunidad de arbitraje*' if hay_arbitraje else '❌ *Sin oportunidad* — spread bajo'}")
 
-    lines.append(f"\n⚡️ *Tip:* Revisa Precio en el menú del bot para más detalles.")
-
     msg = "\n".join(lines)
     _send_channel(msg, parse_mode="Markdown")
 
@@ -1757,6 +1784,11 @@ def _resumen_diario():
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
 def procesar_mensaje(texto, chat_id):
+    if (texto.startswith("/precio") or texto.startswith("/p2p") or texto.startswith("/mercado")):
+        grupo_id = CONFIG.get("grupo_chat_id", "")
+        if grupo_id and str(chat_id) == grupo_id:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": _precio_p2p_resumen(), "parse_mode": "Markdown"})
+        return
     if texto.startswith("/groupid"):
         if not _es_master(chat_id):
             return
@@ -2868,28 +2900,8 @@ def loop_monitoreo():
                     print(f"Error DEX/{nk}: {e}", flush=True)
 
             ciclo += 1
-            if ciclo % 60 == 0 and mejores:
-                usdt_heart = ULTIMOS.get("USDT", {})
-                precio_linea = ""
-                if usdt_heart.get("compra"):
-                    precio_linea = f"💵 *USDT*: Compra {usdt_heart['compra']:.2f} | Venta {usdt_heart['venta']:.2f} VES"
-                spread_heart = usdt_heart.get("margen")
-                spread_linea = f"📊 *Spread:* {spread_heart:+.2f}%" if spread_heart is not None else ""
-                bcv_heart = _obtener_tasa_bcv()
-                bcv_linea = f"🏦 *BCV:* {bcv_heart['tasa']:.2f} VES" if bcv_heart and bcv_heart.get('tasa') else ""
-                mejor_asset = ""
-                if top_general:
-                    mejor_asset = f"🔥 *Más vendido:* {top_general['asset']} a {top_general['venta']:.2f} VES ({top_general['margen']:+.2f}%)"
-                oportunidad = "✅ *Hay oportunidad de arbitraje*" if top and top["margen"] >= CONFIG["margen_objetivo"] else "❌ Sin oportunidad en este momento"
-                precio_msg = (
-                    f"💰 *MERCADO P2P VENEZUELA*\n"
-                    f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"
-                    f"{precio_linea}\n"
-                    f"{spread_linea}\n"
-                    f"{bcv_linea}\n"
-                    f"{mejor_asset}\n\n"
-                    f"{oportunidad}"
-                )
+            if ciclo % 60 == 0:
+                precio_msg = _precio_p2p_resumen()
                 enviar_menu(texto=precio_msg)
                 _send_channel(precio_msg)
             _refrescar_paneles()
