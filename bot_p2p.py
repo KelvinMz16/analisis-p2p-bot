@@ -710,6 +710,7 @@ def _construir_teclado(chat_id=None):
          [{"text": "\U0001F4CA Precisión", "callback_data": "precision"},
           {"text": "\U0001F9EE Calc", "callback_data": "calculadora"},
           {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
+         [{"text": "\u2753 Ayuda", "callback_data": "ayuda"}],
     ]
 
 
@@ -2326,6 +2327,31 @@ def procesar_callback(cq):
     if restringido:
         return
 
+    if data == "ayuda":
+        editar_mensaje(chat_id, msg_id,
+            "*Comandos del bot:*\n\n"
+            "📋 `/menu` — Menú principal\n"
+            "🏷️ `/precio` — Precios P2P\n"
+            "📊 `/multi` — Multi-cripto\n"
+            "💰 `/capital` — Capital\n"
+            "🎯 `/umbral` — Umbral de alerta\n"
+            "📈 `/historial` — Historial\n"
+            "🔍 `/filtro` — Filtro\n"
+            "🔄 `/dex` — DEX\n"
+            "⏰ `/horarios` — Horarios\n"
+            "⚡ `/combo` — Combo\n"
+            "📉 `/mercado` — Mercado\n"
+            "🎯 `/precision` — Precisión\n"
+            "🧮 `/calc` — Calculadora\n\n"
+            "*Comandos de grupo (solo master):*\n"
+            "📢 `/decir <msg>` — Enviar al grupo\n"
+            "🚫 `/ban <id> [horas]` — Banear usuario\n"
+            "✅ `/unban <id>` — Desbanear\n"
+            "🆔 `/groupid` — ID del chat actual\n"
+            "⚙️ `/setgrupo <id>` — Configurar grupo\n\n"
+            "💡 *Tip:* Usa los botones del menú como atajo."
+        )
+        return
     if data == "precio":
         _render_precio(chat_id, msg_id)
 
