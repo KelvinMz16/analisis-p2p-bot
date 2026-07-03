@@ -1721,6 +1721,8 @@ def _resumen_diario():
 # ============================================================
 def procesar_mensaje(texto, chat_id):
     if texto.startswith("/groupid"):
+        if not _es_master(chat_id):
+            return
         _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Este chat ID es: `{chat_id}`", "parse_mode": "Markdown"})
         return
     if texto.startswith("/setgrupo"):
