@@ -2658,7 +2658,9 @@ def loop_monitoreo():
             if ciclo % 30 == 0:
                 _verificar_resultados_senales()
                 _verificar_spread_bcv()
-                _scrapear_subastas()
+
+            # Subastas BCV se ejecuta cada ciclo (tiene su propio intervalo interno)
+            _scrapear_subastas()
 
                 # ============================================================
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
