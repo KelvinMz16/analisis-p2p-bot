@@ -1720,6 +1720,17 @@ def _resumen_diario():
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
 def procesar_mensaje(texto, chat_id):
+    if texto.startswith("/groupid"):
+        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Este chat ID es: `{chat_id}`", "parse_mode": "Markdown"})
+        return
+    if texto.startswith("/setgrupo"):
+        if not _es_master(chat_id):
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Solo el master puede ejecutar este comando."})
+            return
+        CONFIG["grupo_chat_id"] = str(chat_id)
+        guardar_config_local()
+        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Grupo configurado: `{chat_id}`", "parse_mode": "Markdown"})
+        return
     if not _autorizado(chat_id):
         return
     estado = ESTADOS_USUARIO.get(chat_id, {})
@@ -1808,15 +1819,10 @@ def procesar_mensaje(texto, chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un n\u00famero, ej: 776"})
         ESTADOS_USUARIO.pop(chat_id, None)
         return
-    if texto.startswith("/groupid"):
-        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Este chat ID es: `{chat_id}`", "parse_mode": "Markdown"})
-        return
-    if texto.startswith("/setgrupo") and _es_master(chat_id):
-        CONFIG["grupo_chat_id"] = str(chat_id)
-        guardar_config_local()
-        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Grupo configurado: `{chat_id}`", "parse_mode": "Markdown"})
-        return
-    if texto.startswith("/decir") and _es_master(chat_id):
+    if texto.startswith("/decir"):
+        if not _es_master(chat_id):
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Solo el master puede ejecutar este comando."})
+            return
         msg = texto[len("/decir"):].strip()
         if msg:
             destino = CONFIG.get("grupo_chat_id")
@@ -1828,7 +1834,7 @@ def procesar_mensaje(texto, chat_id):
                 except ValueError:
                     _tg_call("sendMessage", {"chat_id": chat_id, "text": "GRUPO_CHAT_ID no es un número válido. Configúralo primero."})
             else:
-                _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay grupo configurado. Corre /groupid desde el grupo y configura GRUPO_CHAT_ID."})
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay grupo configurado. Corre /setgrupo desde el grupo primero."})
         else:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decir <mensaje>"})
         return
