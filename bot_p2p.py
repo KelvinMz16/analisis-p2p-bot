@@ -2851,7 +2851,7 @@ def loop_monitoreo():
                 else:
                     mejor_linea = ""
                 heartbeat_msg = (
-                    f"⏱ *Heartbeat* - {ciclo} ciclos\n"
+                    f"⏱ *Heartbeat* - {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"
                     f"{precio_linea}\n"
                     f"{mejor_linea}\n"
                     f"\U0001F4CA Precisi\u00f3n P2P: {pct_p2p:.0f}% ({p2p_ok}/{total_p2p})"
