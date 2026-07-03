@@ -486,6 +486,7 @@ def guardar_config_local():
             "margen_objetivo": CONFIG.get("margen_objetivo", 0.8),
             "monto_filtro": CONFIG.get("monto_filtro", 0),
             "default_crypto": CONFIG.get("default_crypto", "USDT"),
+            "grupo_chat_id": CONFIG.get("grupo_chat_id", ""),
         }
         supabase_save_config(config_dict)
     except Exception as e:
