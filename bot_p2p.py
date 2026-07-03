@@ -1727,9 +1727,14 @@ def procesar_mensaje(texto, chat_id):
         if not _es_master(chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Solo el master puede ejecutar este comando."})
             return
-        CONFIG["grupo_chat_id"] = str(chat_id)
+        partes = texto.split(maxsplit=1)
+        if len(partes) > 1:
+            grupo_id = partes[1].strip()
+        else:
+            grupo_id = str(chat_id)
+        CONFIG["grupo_chat_id"] = grupo_id
         guardar_config_local()
-        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Grupo configurado: `{chat_id}`", "parse_mode": "Markdown"})
+        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Grupo configurado: `{grupo_id}`", "parse_mode": "Markdown"})
         return
     if not _autorizado(chat_id):
         return
