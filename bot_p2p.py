@@ -1578,22 +1578,16 @@ def _evaluar_senal_multicapa():
         if soportes:
             razones.append(f"Soporte en {soportes[0]} VES")
 
-        indicadores = ""
-        if rsi is not None: indicadores += f"\n📊 RSI(14): {rsi:.1f}"
-        if bb_low is not None: indicadores += f"\n📊 Bollinger: {bb_low:.1f} - {bb_mid:.1f} - {bb_high:.1f}"
-        if macd_line is not None: indicadores += f"\n📊 MACD: {'alcista' if macd_arriba else 'bajista'}"
-
+        razones_simple = razones[:2]
         spark_compra = _sparkline(precios_compra, 16)
         return ("compra", min(conf, 100), detalles,
-            f"\U0001F4C9 *SEÑAL DE COMPRA* (Confianza: {min(conf,100)}%)\n"
-            f"Precio compra: *{r['compra']:.2f} VES* ({desv_compra:+.2f}% vs promedio)\n"
-            f"{'  `' + spark_compra + '`' if spark_compra else ''}\n"
-            f"Promedio 24h: {avg_compra:.2f} VES | Venta: {r['venta']:.2f} VES\n"
-            f"{'📈 Tendencia: estable o subiendo' if pendiente is None or pendiente >= -0.5 else '📉 Tendencia: sigue cayendo'}\n"
-            + (f"✅ Cerca de soporte histórico ({soportes[0]} VES)" if en_soporte else "")
-            + indicadores
-            + f"\nRazones: {', '.join(razones)}\n\n"
-            f"\U0001F449 *Acción:* COMPRA USDT ahora para vender cuando suba.")
+            f"📉 *SEÑAL DE COMPRA* (Confianza: {min(conf,100)}%)\n"
+            f"💵 *Precio:* {r['compra']:.2f} VES\n"
+            f"📊 *Vs promedio 24h:* {desv_compra:+.2f}%\n"
+            f"{'📈 *Tendencia:* estable' if pendiente is None or pendiente >= -0.5 else '📉 *Tendencia:* bajando'}\n"
+            + (f"✅ *Soporte:* {soportes[0]} VES\n" if en_soporte else "")
+            + f"💡 *Razón:* {', '.join(razones_simple)}\n\n"
+            f"🟢 *Acción:* Compra USDT ahora. Precio bajo vs promedio.")
 
     if desv_venta >= TIMING_THRESHOLD_PCT:
         conf, razones = 50, ["Precio alto vs promedio 24h"]
@@ -1613,22 +1607,16 @@ def _evaluar_senal_multicapa():
         if resistencias:
             razones.append(f"Resistencia en {resistencias[-1]} VES")
 
-        indicadores = ""
-        if rsi is not None: indicadores += f"\n📊 RSI(14): {rsi:.1f}"
-        if bb_high is not None: indicadores += f"\n📊 Bollinger: {bb_low:.1f} - {bb_mid:.1f} - {bb_high:.1f}"
-        if macd_line is not None: indicadores += f"\n📊 MACD: {'alcista' if macd_arriba else 'bajista'}"
-
+        razones_simple = razones[:2]
         spark_venta = _sparkline(precios_venta, 16)
         return ("venta", min(conf, 100), detalles,
-            f"\U0001F4C8 *SEÑAL DE VENTA* (Confianza: {min(conf,100)}%)\n"
-            f"Precio venta: *{r['venta']:.2f} VES* ({desv_venta:+.2f}% vs promedio)\n"
-            f"{'  `' + spark_venta + '`' if spark_venta else ''}\n"
-            f"Promedio 24h: {avg_venta:.2f} VES | Compra: {r['compra']:.2f} VES\n"
-            f"{'📉 Tendencia: estable o bajando' if pendiente is None or pendiente <= 0.5 else '📈 Tendencia: sigue subiendo'}\n"
-            + (f"✅ Cerca de resistencia histórica ({resistencias[-1]} VES)" if en_resistencia else "")
-            + indicadores
-            + f"\nRazones: {', '.join(razones)}\n\n"
-            f"\U0001F449 *Acción:* VENDE tus USDT ahora, el mercado está alto.")
+            f"📈 *SEÑAL DE VENTA* (Confianza: {min(conf,100)}%)\n"
+            f"💵 *Precio:* {r['venta']:.2f} VES\n"
+            f"📊 *Vs promedio 24h:* {desv_venta:+.2f}%\n"
+            f"{'📉 *Tendencia:* estable' if pendiente is None or pendiente <= 0.5 else '📈 *Tendencia:* subiendo'}\n"
+            + (f"✅ *Resistencia:* {resistencias[-1]} VES\n" if en_resistencia else "")
+            + f"💡 *Razón:* {', '.join(razones_simple)}\n\n"
+            f"🔴 *Acción:* Vende USDT ahora. Precio alto vs promedio.")
 
     return None, 0, detalles, None
 
@@ -1724,43 +1712,42 @@ def _resumen_diario():
     hora = ahora.strftime("%H:%M")
 
     lines = [
-        f"📊 *RESUMEN DIARIO — {fecha}*",
-        f"⏰ {hora} (Venezuela)\n",
+        f"🌅 *BUENOS DÍAS — RESUMEN DEL MERCADO*",
+        f"📅 {fecha} | ⏰ {hora} (Venezuela)\n",
     ]
 
-    # Tasa BCV oficial
     bcv = _obtener_tasa_bcv()
     if bcv and bcv.get("tasa"):
-        lines.append(f"🏦 *Tasa BCV*: {bcv['tasa']:.2f} VES/USD")
+        lines.append(f"🏦 *BCV:* {bcv['tasa']:.2f} VES/USD")
 
-    # Precios solo USDT y USDC (criptos estables con volumen real)
     for asset in ["USDT", "USDC"]:
         r = calcular_margen(asset)
         if not r:
             continue
         if r.get("moneda") == "USDT":
-            dex_str = f" | DEX: ${r['dex']:.4f}" if r.get("dex") else ""
-            lines.append(f"💰 *{asset}*: ${r['compra']:.4f}{dex_str}")
+            lines.append(f"💵 *{asset} (P2P VES)*: ${r['compra']:.4f}")
         else:
             spread_pct = ((r["venta"] - r["compra"]) / r["compra"]) * 100 if r["compra"] else 0
-            lines.append(f"💰 *{asset}*: {r['compra']:.2f} → {r['venta']:.2f} VES (spread {spread_pct:+.2f}%)")
+            lines.append(f"💵 *{asset} VES*: Comprar {r['compra']:.2f} | Vender {r['venta']:.2f} (spread {spread_pct:+.2f}%)")
         time.sleep(0.3)
 
-    # Sparkline de USDT 24h
     precios_c, precios_v = _cargar_precios_usdt(24)
     if precios_c:
-        spark = _sparkline(precios_c, 20)
-        avg = sum(precios_c) / len(precios_c)
-        lines.append(f"\n📈 *Tendencia USDT 24h*: `{spark}`")
-        lines.append(f"Promedio: {avg:.2f} VES | Registros: {len(precios_c)}")
+        min_c = min(precios_c)
+        max_c = max(precios_c)
+        avg_c = sum(precios_c) / len(precios_c)
+        spark = _sparkline(precios_c, 16)
+        lines.append(f"\n📈 *USDT 24h:* `{spark}`")
+        lines.append(f"   Mín: {min_c:.2f} | Máx: {max_c:.2f} | Prom: {avg_c:.2f} VES")
 
-    # Señal actual
-    senal, confianza, det, _ = _evaluar_senal_multicapa()
-    if senal:
-        emoji = "📉" if senal == "compra" else "📈"
-        lines.append(f"\n{emoji} *Señal activa*: {senal.upper()} (Confianza: {confianza}%)")
-    else:
-        lines.append(f"\n⏳ *Sin señal clara* — seguimiento en curso...")
+    r_usdt = calcular_margen("USDT")
+    if r_usdt:
+        usdt_spread = ((r_usdt["venta"] - r_usdt["compra"]) / r_usdt["compra"]) * 100
+        hay_arbitraje = usdt_spread >= CONFIG["margen_objetivo"]
+        lines.append(f"\n📊 *Spread actual USDT:* {usdt_spread:+.2f}%")
+        lines.append(f"{'✅ *Hay oportunidad de arbitraje*' if hay_arbitraje else '❌ *Sin oportunidad* — spread bajo'}")
+
+    lines.append(f"\n⚡️ *Tip:* Revisa Precio en el menú del bot para más detalles.")
 
     msg = "\n".join(lines)
     _send_channel(msg, parse_mode="Markdown")
@@ -2636,15 +2623,17 @@ def polling_telegram():
                             if member.get("is_bot"):
                                 continue
                             _send_channel(
-                                f"👋 *Bienvenido {display} a Arbitraje P2P Señales VES*\n\n"
-                                "📊 Señales P2P USDT/USDC | 🏦 Alertas BCV\n"
-                                "📈 Resumen diario a las 7am\n"
-                                "⏰ Horario: 7am - 11pm\n\n"
-                                "⚡️ *Reglas:*\n"
-                                "• No spam ni scams\n"
-                                "• No promocionar otros canales\n"
-                                "• Respetar a la comunidad\n"
-                                "• Solo crypto/P2P Venezuela"
+                                f"👋 *¡Bienvenido {display}!*\n\n"
+                                "📊 *¿Qué ofrecemos?*\n"
+                                "• Precios P2P USDT/USDC en VES en vivo\n"
+                                "• Alertas de arbitraje cuando hay oportunidad\n"
+                                "• 🏦 Cambios de tasa BCV en tiempo real\n"
+                                "• 📈 Resumen diario del mercado a las 7am\n"
+                                "• Alertas de subastas bancarias\n\n"
+                                "🤖 *Bot privado:* Cada miembro tendrá acceso a su asistente personal P2P.\n"
+                                "   → Habla con @VESArbitrajeP2PBot en Telegram\n\n"
+                                "📌 *Reglas:* No spam, no scams, respeto mutuo.\n\n"
+                                "¡Aprovecha las oportunidades del mercado P2P!"
                             )
                     elif "text" in msg:
                         procesar_mensaje(msg["text"], msg["chat"]["id"])
@@ -2882,28 +2871,29 @@ def loop_monitoreo():
 
             ciclo += 1
             if ciclo % 60 == 0 and mejores:
-                p2p_ok = PRECISION["p2p"]["ok"]
-                p2p_fail = PRECISION["p2p"]["fail"]
-                total_p2p = p2p_ok + p2p_fail
-                pct_p2p = (p2p_ok / total_p2p * 100) if total_p2p else 0
                 usdt_heart = ULTIMOS.get("USDT", {})
                 precio_linea = ""
                 if usdt_heart.get("compra"):
-                    precio_linea = f"\U0001F4B0 USDT: Compra {usdt_heart['compra']:.2f} | Venta {usdt_heart['venta']:.2f} VES"
-                if top_general and top_general.get("moneda") == "USDT":
-                    mejor_linea = f"\U0001F4B1 Mejor USDT: {top_general['asset']} (${top_general['compra']:.4f})"
-                elif top_general:
-                    mejor_linea = f"\U0001F3C6 Mejor: {top_general['asset']} ({top_general['margen']:+.2f}%)"
-                else:
-                    mejor_linea = ""
-                heartbeat_msg = (
-                    f"⏱ *Heartbeat* - {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"
+                    precio_linea = f"💵 *USDT*: Compra {usdt_heart['compra']:.2f} | Venta {usdt_heart['venta']:.2f} VES"
+                spread_heart = usdt_heart.get("margen")
+                spread_linea = f"📊 *Spread:* {spread_heart:+.2f}%" if spread_heart is not None else ""
+                bcv_heart = _obtener_tasa_bcv()
+                bcv_linea = f"🏦 *BCV:* {bcv_heart['tasa']:.2f} VES" if bcv_heart and bcv_heart.get('tasa') else ""
+                mejor_asset = ""
+                if top_general:
+                    mejor_asset = f"🔥 *Más vendido:* {top_general['asset']} a {top_general['venta']:.2f} VES ({top_general['margen']:+.2f}%)"
+                oportunidad = "✅ *Hay oportunidad de arbitraje*" if top and top["margen"] >= CONFIG["margen_objetivo"] else "❌ Sin oportunidad en este momento"
+                precio_msg = (
+                    f"💰 *MERCADO P2P VENEZUELA*\n"
+                    f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"
                     f"{precio_linea}\n"
-                    f"{mejor_linea}\n"
-                    f"\U0001F4CA Precisi\u00f3n P2P: {pct_p2p:.0f}% ({p2p_ok}/{total_p2p})"
+                    f"{spread_linea}\n"
+                    f"{bcv_linea}\n"
+                    f"{mejor_asset}\n\n"
+                    f"{oportunidad}"
                 )
-                enviar_menu(texto=heartbeat_msg)
-                _send_channel(heartbeat_msg)
+                enviar_menu(texto=precio_msg)
+                _send_channel(precio_msg)
             _refrescar_paneles()
         except Exception as e:
             print(f"Error: {e}", flush=True)
