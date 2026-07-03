@@ -179,6 +179,7 @@ CONFIG = {
     "margen_objetivo": _safe_float(_config_local.get("margen_objetivo", os.getenv("UMBRAL", "0.8")), 0.8),
     "monto_filtro": _safe_int(_config_local.get("monto_filtro", os.getenv("MONTO_FILTRO", "0")), 0),
     "default_crypto": _config_local.get("default_crypto", os.getenv("DEFAULT_CRYPTO", "USDT")),
+    "grupo_chat_id": _config_local.get("grupo_chat_id", os.getenv("GRUPO_CHAT_ID", "")),
 }
 
 WHITELIST = set()
@@ -299,8 +300,8 @@ _SUBASTAS_ULTIMO_SCRAPED = 0
 def _obtener_intervalo_subastas():
     """Devuelve el intervalo de scraping segun la hora del dia."""
     hora = datetime.now(VENEZUELA_TZ).hour
-    if 8 <= hora < 12:
-        return 30   # manana: cada 30 segundos
+    if 7 <= hora < 12:
+        return 5    # manana: cada 5 segundos
     elif 12 <= hora < 18:
         return 120  # tarde: cada 2 minutos
     else:
@@ -1818,6 +1819,30 @@ def procesar_mensaje(texto, chat_id):
         except ValueError:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un n\u00famero, ej: 776"})
         ESTADOS_USUARIO.pop(chat_id, None)
+        return
+    if texto.startswith("/groupid"):
+        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Este chat ID es: `{chat_id}`", "parse_mode": "Markdown"})
+        return
+    if texto.startswith("/setgrupo") and _es_master(chat_id):
+        CONFIG["grupo_chat_id"] = str(chat_id)
+        guardar_config_local()
+        _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Grupo configurado: `{chat_id}`", "parse_mode": "Markdown"})
+        return
+    if texto.startswith("/decir") and _es_master(chat_id):
+        msg = texto[len("/decir"):].strip()
+        if msg:
+            destino = CONFIG.get("grupo_chat_id")
+            if destino:
+                try:
+                    destino_id = int(destino)
+                    _tg_call("sendMessage", {"chat_id": destino_id, "text": msg, "parse_mode": "Markdown"})
+                    _tg_call("sendMessage", {"chat_id": chat_id, "text": "Mensaje enviado al grupo."})
+                except ValueError:
+                    _tg_call("sendMessage", {"chat_id": chat_id, "text": "GRUPO_CHAT_ID no es un número válido. Configúralo primero."})
+            else:
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay grupo configurado. Corre /groupid desde el grupo y configura GRUPO_CHAT_ID."})
+        else:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decir <mensaje>"})
         return
     enviar_menu(chat_id)
 
