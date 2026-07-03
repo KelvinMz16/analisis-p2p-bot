@@ -326,6 +326,39 @@ def _verificar_cambio_tasa_bcv():
 _SUBASTAS_ESTADO = {}  # banco -> {"status": "activa"|"cerrada", "ts": timestamp}
 _SUBASTAS_ULTIMO_SCRAPED = 0
 _ULTIMO_SPREAD_BCV = 0  # timestamp del ultimo spread enviado
+_ULTIMO_TOP_OPORT = 0  # timestamp del ultimo top oportunidades enviado
+
+
+def _top_oportunidades():
+    global _ULTIMO_TOP_OPORT
+    if time.time() - _ULTIMO_TOP_OPORT < 21600:
+        return
+    ops = []
+    for a in ASSETS_VES:
+        if a == "BTC":
+            continue
+        r = ULTIMOS.get(a)
+        if r and r.get("margen", -999) >= CONFIG["margen_objetivo"]:
+            ops.append((a, r["margen"], r["compra"], r["venta"]))
+    if not ops:
+        return
+    ops.sort(key=lambda x: x[1], reverse=True)
+    usdt = ULTIMOS.get("USDT", {})
+    bcv = _obtener_tasa_bcv()
+    bcv_str = f"🏦 *BCV:* {bcv['tasa']:.2f} VES" if bcv and bcv.get('tasa') else ""
+    lines = ["🔥 *TOP OPORTUNIDADES P2P*",
+             f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"]
+    for i, (a, m, c, v) in enumerate(ops[:3], 1):
+        lines.append(f"{i}. *{a}:* +{m:.2f}% (Compra {c:.2f} | Venta {v:.2f} VES)")
+    lines.append("")
+    usdt_str = f"💵 *USDT:* Compra {usdt['compra']:.2f} | Venta {usdt['venta']:.2f} VES" if usdt.get("compra") else ""
+    if usdt_str:
+        lines.append(usdt_str)
+    if bcv_str:
+        lines.append(bcv_str)
+    _ULTIMO_TOP_OPORT = time.time()
+    _send_channel("\n".join(lines))
+
 _ULTIMA_TASA_BCV = 0  # ultima tasa BCV conocida
 
 def _obtener_intervalo_subastas():
@@ -1645,7 +1678,7 @@ def _evaluar_senal_multicapa():
             f"{'📉 *Tendencia:* estable' if pendiente is None or pendiente <= 0.5 else '📈 *Tendencia:* subiendo'}\n"
             + (f"✅ *Resistencia:* {resistencias[-1]} VES\n" if en_resistencia else "")
             + f"💡 *Razón:* {', '.join(razones_simple)}\n\n"
-            f"🔴 *Acción:* Vende USDT ahora. Precio alto vs promedio.")
+            f"🔴 *Acción:* Venta de USDT ahora. Precio alto vs promedio.")
 
     return None, 0, detalles, None
 
@@ -2884,7 +2917,7 @@ def loop_monitoreo():
             # Verificar resultados de senales previas (cada 30 ciclos)
             if ciclo % 30 == 0:
                 _verificar_resultados_senales()
-                _verificar_spread_bcv()
+                _top_oportunidades()
 
             # Detectar cambio de tasa BCV (cada ciclo)
             _verificar_cambio_tasa_bcv()
