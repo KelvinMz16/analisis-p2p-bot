@@ -2712,6 +2712,8 @@ def polling_telegram():
                                 "📌 *Reglas:* No spam, no scams, respeto mutuo.\n\n"
                                 "¡Aprovecha las oportunidades del mercado P2P!"
                             )
+                            time.sleep(1)
+                            _send_channel(_precio_p2p_resumen())
                     elif "text" in msg:
                         procesar_mensaje(msg["text"], msg["chat"]["id"])
         except Exception as e:
