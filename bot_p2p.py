@@ -2674,6 +2674,8 @@ def polling_telegram():
                                 "• 🏦 Cambios de tasa BCV en tiempo real\n"
                                 "• 📈 Resumen diario del mercado a las 7am\n"
                                 "• Alertas de subastas bancarias\n\n"
+                                "💬 *En el grupo de discusión:*\n"
+                                "Usa `/precio` para ver el mercado al instante\n\n"
                                 "📌 *Reglas:* No spam, no scams, respeto mutuo.\n\n"
                                 "¡Aprovecha las oportunidades del mercado P2P!"
                             )
