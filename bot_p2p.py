@@ -1275,7 +1275,11 @@ def generar_reporte_horarios():
     datos = analizar_historico_horarios()
     if not datos:
         return "⚠️ *No hay suficientes datos* históricos para realizar el análisis de horarios aún. Se necesitan al menos 24 horas de datos."
-        
+
+    # Obtener precio actual en vivo para comparar
+    precio_compra_ahora = obtener_precio_p2p("BUY", asset="USDT", trans_amount=0)
+    precio_venta_ahora = obtener_precio_p2p("SELL", asset="USDT", trans_amount=0)
+    
     # Encontrar mejores horas individuales
     mejor_maker_compra = min(datos.keys(), key=lambda h: datos[h]["avg_compra"])
     mejor_maker_venta = max(datos.keys(), key=lambda h: datos[h]["avg_venta"])
@@ -1301,24 +1305,45 @@ def generar_reporte_horarios():
                 "compra": sum(c_vals) / len(c_vals),
                 "venta": sum(v_vals) / len(v_vals)
             }
-            
+
+    # Precio actual vs promedio histórico
     texto = (
-        f"📊 *ANÁLISIS DE HORARIOS (USDT)*\n"
-        f"Basado en los últimos 7 días de historial.\n\n"
-        f"🟢 *Mejor hora para COMPRAR (anuncio Maker):*\n"
-        f"   ➔ *{mejor_maker_compra:02d}:00 VET* (Promedio: {datos[mejor_maker_compra]['avg_compra']:.2f} VES)\n"
-        f"🔴 *Mejor hora para VENDER (anuncio Maker):*\n"
-        f"   ➔ *{mejor_maker_venta:02d}:00 VET* (Promedio: {datos[mejor_maker_venta]['avg_venta']:.2f} VES)\n\n"
-        f"📈 *Promedios por Bloques de Horas:*\n"
+        f"📊 *ANÁLISIS DE HORARIOS (USDT)*\n\n"
+        f"💡 *¿Qué es esto?* Un promedio del precio del USDT a cada hora\n"
+        f"durante los últimos 7 días. Sirve para ver *patrones*: saber a\n"
+        f"qué horas suele estar más barato o más caro.\n"
+        f"⚠️ No es el precio actual — son datos históricos.\n\n"
+    )
+    
+    # Precio actual vs promedio general
+    todos_precios = [datos[h] for h in datos]
+    prom_gral_compra = sum(d['avg_compra'] for d in todos_precios) / len(todos_precios)
+    prom_gral_venta = sum(d['avg_venta'] for d in todos_precios) / len(todos_precios)
+    
+    if precio_compra_ahora and precio_venta_ahora:
+        dif_compra = ((precio_compra_ahora - prom_gral_compra) / prom_gral_compra) * 100
+        dif_venta = ((precio_venta_ahora - prom_gral_venta) / prom_gral_venta) * 100
+        texto += (
+            f"📌 *Precio AHORA vs Promedio 7 días:*\n"
+            f"   Compra: *{precio_compra_ahora:.2f}* VES ({dif_compra:+.2f}% vs prom.)\n"
+            f"   Venta:  *{precio_venta_ahora:.2f}* VES ({dif_venta:+.2f}% vs prom.)\n"
+            f"   Prom. gral. compra: {prom_gral_compra:.2f} VES\n"
+            f"   Prom. gral. venta:  {prom_gral_venta:.2f} VES\n\n"
+        )
+    
+    texto += (
+        f"🟢 *Mejor hora para COMPRAR (más barato):*\n"
+        f"   ➔ *{mejor_maker_compra:02d}:00* — Prom. 7 días: {datos[mejor_maker_compra]['avg_compra']:.2f} VES\n"
+        f"🔴 *Mejor hora para VENDER (más caro):*\n"
+        f"   ➔ *{mejor_maker_venta:02d}:00* — Prom. 7 días: {datos[mejor_maker_venta]['avg_venta']:.2f} VES\n\n"
+        f"📈 *Promedio por Bloque Horario (7 días):*\n"
     )
     
     for bloque, stats in bloque_stats.items():
         spread_bruto = ((stats['venta'] - stats['compra']) / stats['compra']) * 100
         texto += (
             f"📍 *{bloque}*\n"
-            f"   • Compra Maker: {stats['compra']:.2f} VES\n"
-            f"   • Venta Maker:  {stats['venta']:.2f} VES\n"
-            f"   • Spread Promedio: {spread_bruto:+.2f}%\n"
+            f"   Compra: {stats['compra']:.2f} | Venta: {stats['venta']:.2f} | Spread: {spread_bruto:+.2f}%\n"
         )
         
     spread_por_bloque = [(b, ((s['venta'] - s['compra']) / s['compra']) * 100, s) for b, s in bloque_stats.items()]
@@ -1327,20 +1352,27 @@ def generar_reporte_horarios():
     peor_bloque = spread_por_bloque[-1]
 
     tips = []
-    tips.append(f"📍 *{mejor_bloque[0]}* tiene el spread más alto ({mejor_bloque[1]:+.2f}%) — mejor momento para operar.")
-    tips.append(f"📍 *{peor_bloque[0]}* tiene el spread más bajo ({peor_bloque[1]:+.2f}%) — menor oportunidad.")
+    tips.append(f"📍 *{mejor_bloque[0]}* — spread más alto ({mejor_bloque[1]:+.2f}%) → mejor ventana para operar.")
+    tips.append(f"📍 *{peor_bloque[0]}* — spread más bajo ({peor_bloque[1]:+.2f}%) → menos oportunidad.")
 
     horas_top = sorted(datos.items(), key=lambda x: x[1]['avg_compra'])[:2]
-    tips.append(f"🟢 Comprar más barato: ~{horas_top[0][0]:02d}:00 ({horas_top[0][1]['avg_compra']:.0f} VES) o {horas_top[1][0]:02d}:00 ({horas_top[1][1]['avg_compra']:.0f} VES).")
+    tips.append(f"🟢 Compras más baratas (prom. 7 días): ~{horas_top[0][0]:02d}:00 y ~{horas_top[1][0]:02d}:00.")
 
     horas_mas_muestras = sorted(datos.items(), key=lambda x: x[1]['muestras'], reverse=True)[:2]
-    tips.append(f"📊 Mayor liquidez: ~{horas_mas_muestras[0][0]:02d}:00 y {horas_mas_muestras[1][0]:02d}:00 (más anuncios activos).")
+    tips.append(f"📊 Mayor liquidez (más órdenes): ~{horas_mas_muestras[0][0]:02d}:00 y ~{horas_mas_muestras[1][0]:02d}:00.")
 
     horas_menos_muestras = sorted(datos.items(), key=lambda x: x[1]['muestras'])[:2]
     if horas_menos_muestras[0][1]['muestras'] < 10:
-        tips.append(f"⚠️ Baja liquidez: ~{horas_menos_muestras[0][0]:02d}:00 (solo {horas_menos_muestras[0][1]['muestras']} muestras) — spreads pueden ser erráticos.")
+        tips.append(f"⚠️ Baja liquidez: ~{horas_menos_muestras[0][0]:02d}:00 ({horas_menos_muestras[0][1]['muestras']} muestras) — spreads erráticos.")
 
-    texto += "\n💡 *Tips basados en datos:*\n" + "\n".join(f"• {t}" for t in tips)
+    texto += "\n💡 *Tips:*\n" + "\n".join(f"• {t}" for t in tips)
+    texto += (
+        "\n\n📖 *Cómo usar este análisis:*\n"
+        "• Si el precio AHORA está por debajo del prom. 7 días → está barato\n"
+        "• Si está por encima → está caro respecto al histórico\n"
+        "• El spread alto = más ganancia potencial por operación\n"
+        "• La liquidez alta = órdenes se ejecutan más rápido"
+    )
     return texto
 
 
