@@ -459,7 +459,8 @@ def _scrapear_subastas():
 
         for banco in bancos_detectados:
             prev = _SUBASTAS_ESTADO.get(banco, {})
-            if prev.get("status") == status:
+            # Para procesando, siempre enviar (ACREDITANDO, APROBANDO, etc)
+            if prev.get("status") == status and status != "procesando":
                 continue
             print(f"[Subastas] {banco} -> {status}", flush=True)
 
