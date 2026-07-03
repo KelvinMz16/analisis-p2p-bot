@@ -272,6 +272,10 @@ def _obtener_tasa_bcv():
 
 def _verificar_spread_bcv():
     """Compara tasa BCV vs P2P y envía alerta si el spread es significativo."""
+    global _ULTIMO_SPREAD_BCV
+    # Cooldown: una vez cada 6 horas
+    if time.time() - _ULTIMO_SPREAD_BCV < 21600:
+        return
     bcv = _obtener_tasa_bcv()
     if not bcv or not bcv.get("tasa"):
         return
@@ -281,6 +285,7 @@ def _verificar_spread_bcv():
         return
     spread_pct = ((usdt_p2p - tasa_bcv) / tasa_bcv) * 100
     if abs(spread_pct) >= 5:
+        _ULTIMO_SPREAD_BCV = time.time()
         emoji = "📈" if spread_pct > 0 else "📉"
         _send_channel(
             f"{emoji} *Spread BCV vs P2P*\n\n"
@@ -296,6 +301,7 @@ def _verificar_spread_bcv():
 # ============================================================
 _SUBASTAS_ESTADO = {}  # banco -> {"status": "activa"|"cerrada", "ts": timestamp}
 _SUBASTAS_ULTIMO_SCRAPED = 0
+_ULTIMO_SPREAD_BCV = 0  # timestamp del ultimo spread enviado
 
 def _obtener_intervalo_subastas():
     """Devuelve el intervalo de scraping segun la hora del dia."""
@@ -1845,6 +1851,34 @@ def procesar_mensaje(texto, chat_id):
         else:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decir <mensaje>"})
         return
+    if texto.startswith("/help") or texto.startswith("/start") or texto == "/":
+        if not _es_master(chat_id):
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Bot de señales P2P. Usa los botones del menú.", "parse_mode": "Markdown"})
+            return
+        _tg_call("sendMessage", {"chat_id": chat_id, "text":
+            "*Comandos del bot:*\n\n"
+            "📋 `/menu` — Menú principal\n"
+            "🏷️ `/precio` — Precios P2P\n"
+            "📊 `/multi` — Multi-cripto\n"
+            "💰 `/capital` — Capital\n"
+            "🎯 `/umbral` — Umbral de alerta\n"
+            "📈 `/historial` — Historial\n"
+            "🔍 `/filtro` — Filtro\n"
+            "🔄 `/dex` — DEX\n"
+            "⏰ `/horarios` — Horarios\n"
+            "⚡ `/combo` — Combo\n"
+            "📉 `/mercado` — Mercado\n"
+            "🎯 `/precision` — Precisión\n"
+            "🧮 `/calc` — Calculadora\n\n"
+            "*Comandos de grupo (solo master):*\n"
+            "📢 `/decir <msg>` — Enviar al grupo\n"
+            "🚫 `/ban <id> [horas]` — Banear usuario\n"
+            "✅ `/unban <id>` — Desbanear\n"
+            "🆔 `/groupid` — ID del chat actual\n"
+            "⚙️ `/setgrupo <id>` — Configurar grupo\n\n"
+            "💡 *Tip:* También puedes usar los botones del menú.",
+            "parse_mode": "Markdown"})
+        return
     if texto.startswith("/ban"):
         if not _es_master(chat_id):
             return
@@ -2783,7 +2817,7 @@ def loop_monitoreo():
                 usdt_heart = ULTIMOS.get("USDT", {})
                 precio_linea = ""
                 if usdt_heart.get("compra"):
-                    precio_linea = f"\U0001F4B0 USDT: {usdt_heart['compra']:.2f} / {usdt_heart['venta']:.2f} VES"
+                    precio_linea = f"\U0001F4B0 USDT: Compra {usdt_heart['compra']:.2f} | Venta {usdt_heart['venta']:.2f} VES"
                 if top_general and top_general.get("moneda") == "USDT":
                     mejor_linea = f"\U0001F4B1 Mejor USDT: {top_general['asset']} (${top_general['compra']:.4f})"
                 elif top_general:
