@@ -2490,14 +2490,14 @@ def polling_telegram():
                                 continue
                             _send_channel(
                                 f"👋 *Bienvenido {display} a Arbitraje P2P Señales VES*\n\n"
-                                "Canal de señales de arbitraje P2P USDT/USDC.\n\n"
-                                "📊 Señales de compra/venta con análisis técnico\n"
-                                "📈 Resumen diario del mercado a las 7am\n"
-                                "🏦 Alertas de intervención BCV en tiempo real\n"
-                                "💬 Discusión en grupo vinculado\n\n"
-                                "⏰ *Horario de señales:* 7am - 11pm (Venezuela)\n"
-                                "🌙 Modo silencioso: 11pm - 7am\n\n"
-                                "Suscríbete para no perderte ninguna señal."
+                                "📊 Señales P2P USDT/USDC | 🏦 Alertas BCV\n"
+                                "📈 Resumen diario a las 7am\n"
+                                "⏰ Horario: 7am - 11pm\n\n"
+                                "⚡️ *Reglas:*\n"
+                                "• No spam ni scams\n"
+                                "• No promocionar otros canales\n"
+                                "• Respetar a la comunidad\n"
+                                "• Solo crypto/P2P Venezuela"
                             )
                     elif "text" in msg:
                         procesar_mensaje(msg["text"], msg["chat"]["id"])
