@@ -2630,8 +2630,6 @@ def polling_telegram():
                                 "• 🏦 Cambios de tasa BCV en tiempo real\n"
                                 "• 📈 Resumen diario del mercado a las 7am\n"
                                 "• Alertas de subastas bancarias\n\n"
-                                "🤖 *Bot privado:* Cada miembro tendrá acceso a su asistente personal P2P.\n"
-                                "   → Habla con @VESArbitrajeP2PBot en Telegram\n\n"
                                 "📌 *Reglas:* No spam, no scams, respeto mutuo.\n\n"
                                 "¡Aprovecha las oportunidades del mercado P2P!"
                             )
