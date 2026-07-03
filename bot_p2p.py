@@ -329,43 +329,84 @@ def _scrapear_subastas():
         return
 
     import re
-    # Buscar mensajes recientes del canal
     mensajes = re.findall(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
     if not mensajes:
         return
 
-    for msg_html in mensajes[-30:]:  # ultimos 30 mensajes
+    # Lista completa de bancos (nombres cortos y largos)
+    BANCOS = {
+        "BBVA": "BBVA",
+        "BANCAMIGA": "BANCAMIGA",
+        "BANCO PLAZA": "BANCO PLAZA",
+        "BANCO EXTERIOR": "BANCO EXTERIOR",
+        "EXTERIOR": "BANCO EXTERIOR",
+        "BANCARIBE": "BANCARIBE",
+        "BNC": "BNC",
+        "BANCOCENTRO": "BANCOCENTRO",
+        "BANCO VENEZOLANO DE CRÉDITO": "BANCO VENEZOLANO DE CRÉDITO",
+        "100% BANCO": "100% BANCO",
+        "BANCO MERCANTIL": "MERCANTIL",
+        "MERCANTIL": "MERCANTIL",
+        "BANCO NACIONAL DE CRÉDITO": "BANCO NACIONAL DE CRÉDITO",
+        "BANCO PROVINCIAL": "PROVINCIAL",
+        "BBVA PROVINCIAL": "PROVINCIAL",
+        "PROVINCIAL": "PROVINCIAL",
+        "BANCO DEL TESORO": "BANCO DEL TESORO",
+        "BDT": "BDT",
+        "BDV": "BDV",
+        "BANCO DE VENEZUELA": "BDV",
+        "BANESCO": "BANESCO",
+        "BANCO MERCANTIL": "MERCANTIL",
+    }
+
+    for msg_html in mensajes[-30:]:
         msg = re.sub(r'<[^>]+>', ' ', msg_html).strip()
         msg = re.sub(r'\s+', ' ', msg)
 
-        # Detectar bancos y estado
+        # Detectar bancos
         bancos_detectados = []
-        for banco in ["BBVA", "BANCAMIGA", "BANCO PLAZA", "BANCO EXTERIOR", "BANCARIBE",
-                       "BNC", "BANCOCENTRO", "BANCO VENEZOLANO DE CRÉDITO", "Banco Plaza",
-                       "100% BANCO", "BANCO MERCANTIL", "MERCANTIL", "BANCO NACIONAL DE CRÉDITO",
-                       "BANCO PROVINCIAL", "BBVA PROVINCIAL", "BANCO DEL TESORO",
-                       "BDT", "BANCAMIGA", "BANCO NACIONAL DE CRÉDITO"]:
-            if banco.upper() in msg.upper():
-                bancos_detectados.append(banco)
+        for keyword, nombre in BANCOS.items():
+            if keyword.upper() in msg.upper() and nombre not in bancos_detectados:
+                bancos_detectados.append(nombre)
 
         # Detectar estado
         status = None
         tasa = None
         minimo = None
         maximo = None
+        accion = ""
 
-        if "INTERVENCIÓN ACTIVA" in msg or "INTERVENCION ACTIVA" in msg:
+        msg_upper = msg.upper()
+
+        # Estados de intervención
+        if "INTERVENCIÓN ACTIVA" in msg_upper or "INTERVENCION ACTIVA" in msg_upper:
             status = "activa"
-        elif "INTERVENCIÓN CERRADA" in msg or "INTERVENCION CERRADA" in msg:
+            accion = "INTERVENCIÓN ACTIVA"
+        elif "INTERVENCIÓN CERRADA" in msg_upper or "INTERVENCION CERRADA" in msg_upper:
             status = "cerrada"
-        elif "APROBANDO" in msg or "ACREDITANDO" in msg or "PACTANDO" in msg:
+            accion = "INTERVENCIÓN CERRADA"
+        elif "INTERVENCIÓN DIGITAL ACTIVA" in msg_upper or "INTERVENCION DIGITAL ACTIVA" in msg_upper:
+            status = "activa"
+            accion = "INTERVENCIÓN DIGITAL ACTIVA"
+        elif "INTERVENCION ELECTRÓNICA ACTIVA" in msg_upper or "INTERVENCION ELECTRONICA ACTIVA" in msg_upper:
+            status = "activa"
+            accion = "INTERVENCIÓN ELECTRÓNICA ACTIVA"
+        elif "CONTINUA" in msg_upper or "ABIERTA" in msg_upper:
+            status = "activa"
+            accion = "INTERVENCIÓN ACTIVA"
+        elif "CERRADA" in msg_upper:
+            status = "cerrada"
+            accion = "INTERVENCIÓN CERRADA"
+        # Procesamiento de órdenes
+        elif "APROBANDO" in msg_upper:
             status = "procesando"
-        elif "INTERVENCION" in msg or "INTERVENCIÓN" in msg:
-            # Detectar otros estados de intervención
-            if "CONTINUA" in msg or "ABIERTA" in msg:
-                status = "activa"
-            elif "CERRADA" in msg:
-                status = "cerrada"
+            accion = "APROBANDO ÓRDENES"
+        elif "ACREDITANDO" in msg_upper or "ACREDITARON" in msg_upper:
+            status = "procesando"
+            accion = "ACREDITANDO ÓRDENES"
+        elif "PACTANDO" in msg_upper:
+            status = "procesando"
+            accion = "PACTANDO MONTO"
 
         # Extraer tasa
         tasa_match = re.search(r'(?:TASA|tasa)[:\s]*Bs\.?\s*([\d.,]+)', msg)
@@ -386,18 +427,17 @@ def _scrapear_subastas():
         for banco in bancos_detectados:
             prev = _SUBASTAS_ESTADO.get(banco, {})
             if prev.get("status") == status:
-                continue  # sin cambio
+                continue
 
             _SUBASTAS_ESTADO[banco] = {"status": status, "ts": ahora}
 
-            # Enviar alerta al canal
             if status == "activa":
                 tasa_str = f"Tasa: Bs. {tasa}" if tasa else ""
                 rango_str = ""
                 if minimo and maximo:
                     rango_str = f"Mín: ${minimo} | Máx: ${maximo}"
                 _send_channel(
-                    f"🏦 *{banco}* — INTERVENCIÓN ACTIVA\n"
+                    f"🏦 *{banco}* — {accion}\n"
                     f"{tasa_str}\n"
                     f"{rango_str}\n"
                     f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
@@ -405,20 +445,11 @@ def _scrapear_subastas():
                 )
             elif status == "cerrada":
                 _send_channel(
-                    f"🏦 *{banco}* — INTERVENCIÓN CERRADA\n"
+                    f"🏦 *{banco}* — {accion}\n"
                     f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
                     parse_mode="Markdown"
                 )
             elif status == "procesando":
-                # Detectar tipo de proceso
-                if "APROBANDO" in msg:
-                    accion = "APROBANDO ÓRDENES"
-                elif "ACREDITANDO" in msg:
-                    accion = "ACREDITANDO ÓRDENES"
-                elif "PACTANDO" in msg:
-                    accion = "PACTANDO MONTO"
-                else:
-                    accion = "PROCESANDO"
                 _send_channel(
                     f"🏦 *{banco}* — {accion}\n"
                     f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
