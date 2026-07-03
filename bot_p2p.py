@@ -1721,19 +1721,6 @@ def _resumen_diario():
 # ============================================================
 def procesar_mensaje(texto, chat_id):
     if not _autorizado(chat_id):
-        if chat_id not in BIENVENIDA_ENVIADA:
-            BIENVENIDA_ENVIADA.add(chat_id)
-            _tg_call("sendMessage", {"chat_id": chat_id, "text":
-                "👋 *Bienvenido a Arbitraje P2P Señales VES*\n\n"
-                "Canal de señales de arbitraje P2P USDT/USDC.\n\n"
-                "📊 Señales de compra/venta con análisis técnico\n"
-                "📈 Resumen diario del mercado a las 7am\n"
-                "🏦 Alertas de intervención BCV en tiempo real\n"
-                "💬 Discusión en grupo vinculado\n\n"
-                "⏰ *Horario de señales:* 7am - 11pm (Venezuela)\n"
-                "🌙 Modo silencioso: 11pm - 7am\n\n"
-                "Suscríbete para no perderte ninguna señal.",
-                "parse_mode": "Markdown"})
         return
     estado = ESTADOS_USUARIO.get(chat_id, {})
     if estado.get("esperando") == "capital":
@@ -2478,8 +2465,29 @@ def polling_telegram():
                 offset = update["update_id"] + 1
                 if "callback_query" in update:
                     procesar_callback(update["callback_query"])
-                elif "message" in update and update["message"].get("text"):
-                    procesar_mensaje(update["message"]["text"], update["message"]["chat"]["id"])
+                elif "message" in update:
+                    msg = update["message"]
+                    # Detectar nuevos miembros en el canal
+                    if "new_chat_members" in msg and msg["chat"]["id"] == int(TELEGRAM_CHANNEL_ID):
+                        for member in msg["new_chat_members"]:
+                            username = member.get("username", "")
+                            nombre = member.get("first_name", "")
+                            display = f"@{username}" if username else nombre
+                            if member.get("is_bot"):
+                                continue
+                            _send_channel(
+                                f"👋 *Bienvenido {display} a Arbitraje P2P Señales VES*\n\n"
+                                "Canal de señales de arbitraje P2P USDT/USDC.\n\n"
+                                "📊 Señales de compra/venta con análisis técnico\n"
+                                "📈 Resumen diario del mercado a las 7am\n"
+                                "🏦 Alertas de intervención BCV en tiempo real\n"
+                                "💬 Discusión en grupo vinculado\n\n"
+                                "⏰ *Horario de señales:* 7am - 11pm (Venezuela)\n"
+                                "🌙 Modo silencioso: 11pm - 7am\n\n"
+                                "Suscríbete para no perderte ninguna señal."
+                            )
+                    elif "text" in msg:
+                        procesar_mensaje(msg["text"], msg["chat"]["id"])
         except Exception as e:
             print(f"Error en polling: {e}", flush=True)
         time.sleep(3)
