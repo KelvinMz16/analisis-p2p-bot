@@ -239,6 +239,47 @@ def _send_channel(texto, parse_mode="Markdown"):
         pass
 
 
+def _verificar_nuevos_miembros():
+    global _ULTIMO_CONTEO_MIEMBROS, _ULTIMO_CONTEO_TS
+    if not TELEGRAM_CHANNEL_ID:
+        return
+    ahora = time.time()
+    if ahora - _ULTIMO_CONTEO_TS < 10:
+        return
+    _ULTIMO_CONTEO_TS = ahora
+    try:
+        resp = _tg_call("getChat", {"chat_id": int(TELEGRAM_CHANNEL_ID)})
+        if not resp or not resp.get("ok"):
+            return
+        nuevo = resp["result"].get("member_count", 0)
+        if _ULTIMO_CONTEO_MIEMBROS and nuevo > _ULTIMO_CONTEO_MIEMBROS:
+            diff = nuevo - _ULTIMO_CONTEO_MIEMBROS
+            _send_channel(
+                "👋 *¡Bienvenido al canal!*\n\n"
+                "📊 *Contenido del canal:*\n"
+                "• 💵 Precios USDT/USDC en VES en vivo (P2P Binance)\n"
+                "• 📈 Alertas de arbitraje cuando el spread da margen\n"
+                "• 🏦 Tasa BCV actualizada en tiempo real\n"
+                "• 📊 Resumen diario del mercado a las 7am\n\n"
+                "💬 *Grupo de discusión:*\n"
+                "Únete para escribir /precio y ver el mercado al instante\n"
+                "👉 https://t.me/arbitrajesp2p\n\n"
+                "📌 *Reglas:* No spam, no scams, respeto mutuo.\n\n"
+                "¡Aprovecha las oportunidades del mercado P2P!"
+            )
+        _ULTIMO_CONTEO_MIEMBROS = nuevo
+    except Exception:
+        pass
+
+def _loop_detectar_miembros():
+    time.sleep(5)
+    while True:
+        try:
+            _verificar_nuevos_miembros()
+        except Exception:
+            pass
+        time.sleep(5)
+
 def _obtener_tasa_bcv():
     """Obtiene la tasa BCV oficial. Primero intenta bcv.org.ve directo, si falla usa finanzasdigital."""
     import re
@@ -334,6 +375,8 @@ def _verificar_cambio_tasa_bcv():
 # SCRAPER SUBASTAS BCV - Telegram @subastasBCV
 # ============================================================
 _SUBASTAS_ESTADO = {}  # banco -> {"status": "activa"|"cerrada", "ts": timestamp}
+_ULTIMO_CONTEO_MIEMBROS = 0
+_ULTIMO_CONTEO_TS = 0
 _SUBASTAS_ULTIMO_SCRAPED = 0
 _ULTIMO_SPREAD_BCV = 0  # timestamp del ultimo spread enviado
 _ULTIMO_TOP_OPORT = 0  # timestamp del ultimo top oportunidades enviado
@@ -3014,6 +3057,8 @@ if __name__ == "__main__":
 
     if TELEGRAM_TOKEN:
         threading.Thread(target=polling_telegram, daemon=True).start()
+        if TELEGRAM_CHANNEL_ID:
+            threading.Thread(target=_loop_detectar_miembros, daemon=True).start()
         time.sleep(2)
         extra = ""
         if not en_horario():
