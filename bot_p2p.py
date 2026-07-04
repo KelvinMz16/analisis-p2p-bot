@@ -1983,6 +1983,18 @@ def procesar_mensaje(texto, chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ingresa un n\u00famero, ej: 776"})
         ESTADOS_USUARIO.pop(chat_id, None)
         return
+    if texto.startswith("/decirchan"):
+        if not _es_master(chat_id):
+            return
+        msg = texto[len("/decirchan"):].strip()
+        if msg and TELEGRAM_CHANNEL_ID:
+            _tg_call("sendMessage", {"chat_id": int(TELEGRAM_CHANNEL_ID), "text": msg, "parse_mode": "Markdown"})
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Mensaje enviado al canal."})
+        elif not TELEGRAM_CHANNEL_ID:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay canal configurado."})
+        else:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decirchan <mensaje>"})
+        return
     if texto.startswith("/decir"):
         if not _es_master(chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Solo el master puede ejecutar este comando."})
