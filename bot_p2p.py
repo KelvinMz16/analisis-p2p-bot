@@ -240,24 +240,34 @@ def _send_channel(texto, parse_mode="Markdown"):
 
 
 def _obtener_tasa_bcv():
-    """Obtiene la tasa BCV oficial scrapeando finanzasdigital.com."""
+    """Obtiene la tasa BCV oficial. Primero intenta bcv.org.ve directo, si falla usa finanzasdigital."""
     import re
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    # 1. Intentar BCV directo
     try:
-        # Buscar ultimo articulo de tasa BCV en la homepage
-        resp = requests.get(
-            "https://finanzasdigital.com/",
-            timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        )
+        resp = requests.get("https://www.bcv.org.ve/", timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            verify=False)
+        if resp.status_code == 200:
+            rate = re.search(r'USD</span>.*?<strong\s+class="strong-tb">\s*([\d.,]+)\s*</strong>', resp.text, re.DOTALL)
+            if rate:
+                tasa_str = rate.group(1).replace(".", "").replace(",", ".")
+                return {"tasa": float(tasa_str), "updated_at": datetime.now(VENEZUELA_TZ).isoformat()}
+    except Exception as e:
+        print(f"[BCV] Error scraping BCV directo: {e}", flush=True)
+
+    # 2. Fallback: finanzasdigital
+    try:
+        resp = requests.get("https://finanzasdigital.com/", timeout=15,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         if resp.status_code != 200:
             return None
-        # Encontrar URL del ultimo articulo BCV
-        articulo_match = re.search(r'href="(https://finanzasdigital\.com/tasa-de-cambio-bcv[^"]*)"', resp.text)
-        if not articulo_match:
+        url_match = re.search(r'href="(https://finanzasdigital\.com/tasa-de-cambio-bcv[^"]*)"', resp.text)
+        if not url_match:
             return None
-        articulo_url = articulo_match.group(1)
-        # Scrapear articulo
-        resp2 = requests.get(articulo_url, timeout=15,
+        resp2 = requests.get(url_match.group(1), timeout=15,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
         if resp2.status_code != 200:
             return None
@@ -266,7 +276,7 @@ def _obtener_tasa_bcv():
             tasa_str = match.group(1).replace('.', '').replace(',', '.')
             return {"tasa": float(tasa_str), "updated_at": datetime.now(VENEZUELA_TZ).isoformat()}
     except Exception as e:
-        print(f"[BCV] Error scraping tasa: {e}", flush=True)
+        print(f"[BCV] Error scraping finanzasdigital: {e}", flush=True)
     return None
 
 
