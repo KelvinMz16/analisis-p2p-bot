@@ -377,6 +377,7 @@ def _verificar_cambio_tasa_bcv():
 _SUBASTAS_ESTADO = {}  # banco -> {"status": "activa"|"cerrada", "ts": timestamp}
 _ULTIMO_CONTEO_MIEMBROS = 0
 _ULTIMO_CONTEO_TS = 0
+_ULTIMA_HORA_ENVIADA = -1
 _SUBASTAS_ULTIMO_SCRAPED = 0
 _ULTIMO_SPREAD_BCV = 0  # timestamp del ultimo spread enviado
 _ULTIMO_TOP_OPORT = 0  # timestamp del ultimo top oportunidades enviado
@@ -3034,11 +3035,14 @@ def loop_monitoreo():
                 except Exception as e:
                     print(f"Error DEX/{nk}: {e}", flush=True)
 
-            ciclo += 1
-            if ciclo % 60 == 0:
-                precio_msg = _precio_p2p_resumen()
-                enviar_menu(texto=precio_msg)
-                _send_channel(precio_msg)
+            global _ULTIMA_HORA_ENVIADA
+            h = datetime.now(VENEZUELA_TZ).hour
+            if h != _ULTIMA_HORA_ENVIADA:
+                _ULTIMA_HORA_ENVIADA = h
+                if h >= 7:
+                    precio_msg = _precio_p2p_resumen()
+                    enviar_menu(texto=precio_msg)
+                    _send_channel(precio_msg)
             _refrescar_paneles()
         except Exception as e:
             print(f"Error: {e}", flush=True)
