@@ -2875,7 +2875,7 @@ def loop_monitoreo():
                         if venta_may:
                             m = _calc_margen(maker_compra, venta_may)
                             comparativo_str = (
-                                f"\n\U0001F504 *Escenario Alternativo (Vender todo de golpe - Mayorista):*\n"
+                                f"\n\U0001F504 *Escenario Alternativo (Venta rápida):*\n"
                                 f"- Vender todo a: *{venta_may:.2f} VES*\n"
                                 f"- Margen Neto: {m['pct']:+.2f}%\n"
                                 f"- Ganancia Neta Total: *${m['usd']:.2f} USD* (~Bs.{m['usd'] * tasa_ves_alt:.2f})\n"
@@ -2885,7 +2885,7 @@ def loop_monitoreo():
                         if venta_frac:
                             m = _calc_margen(maker_compra, venta_frac)
                             comparativo_str = (
-                                f"\n\U0001F504 *Escenario Alternativo (Vender fraccionado de a $10 / 8K Bs):*\n"
+                                f"\n\U0001F504 *Escenario Alternativo (Venta fraccionada):*\n"
                                 f"- Vender en partes a: *{venta_frac:.2f} VES*\n"
                                 f"- Margen Neto: {m['pct']:+.2f}%\n"
                                 f"- Ganancia Neta Total: *${m['usd']:.2f} USD* (~Bs.{m['usd'] * tasa_ves_alt:.2f})\n"
@@ -2896,15 +2896,14 @@ def loop_monitoreo():
                         warning_msg = "\n> ⚠️ *Advertencia:* Tu capital es inferior al mínimo requerido ($100) para crear anuncios Maker. Considera operar como *Taker* o aumentar tu capital antes de publicar anuncios."
 
                     texto_alerta = (
-                        f"\U0001F514 *ALERTA P2P DETALLADA* ({nombre_filtro()})\n"
+                        f"\U0001F514 *ALERTA P2P DETALLADA*\n"
                         f"Activo: *{top['asset']}* | Margen neto actual: *{top['margen']:+.2f}%* \u2705 RENTABLE\n\n"
-                        f"\U0001F449 *Pasos sugeridos para tu configuración actual ({nombre_filtro()}):*\n"
+                        f"\U0001F449 *Pasos sugeridos:*\n"
                         f"1\ufe0f\u20e3 *COMPRA:* Publica un anuncio de *COMPRA* (pagas Bs y recibes {top['asset']}) con precio fijado en *{top['compra']:.2f} VES*.\n"
                         f"   - Configura el límite mínimo de tu anuncio en: *{limite_anuncio}*.\n"
                         f"2\ufe0f\u20e3 *VENTA:* Publica un anuncio de *VENTA* (recibes Bs en BDV/Pago Móvil) con precio fijado en *{top['venta']:.2f} VES*.\n"
-                        f"   - Ganancia neta estimada con tu capital: *${top['ganancia_usd']:.2f} USD* (~{ves_ganancia_str})\n"
                         f"{comparativo_str}\n"
-                        f"\u2139 *Detalle financiero de la alerta:*\n"
+                        f"\u2139 *Detalle financiero:*\n"
                         f"- Spread Bruto: {spread_bruto:.2f}%\n"
                         f"- Comisiones Totales: -{COMISION_TOTAL*100:.2f}% (Binance Maker 0.50% + BDV 0.30%)\n"
                         f"{warning_msg}"
