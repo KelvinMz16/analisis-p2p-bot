@@ -2866,30 +2866,19 @@ def loop_monitoreo():
                     tasa_ves_alerta = ULTIMOS.get("USDT", {}).get("venta") or top['compra']
                     ves_ganancia_str = f"Bs.{top['ganancia_ves']:.2f}" if top.get("ganancia_ves") else f"Bs.{top['ganancia_usd'] * tasa_ves_alerta:.2f}"
                     
-                    # Cómputo del escenario alternativo
+                    # Cómputo del escenario alternativo (siempre: vender todo de golpe)
                     comparativo_str = ""
                     maker_compra = top['compra']
                     tasa_ves_alt = ULTIMOS.get("USDT", {}).get("venta", maker_compra)
-                    if CONFIG["monto_filtro"] > 0:
-                        venta_may = obtener_precio_p2p("BUY", top['asset'], trans_amount=0)
-                        if venta_may:
-                            m = _calc_margen(maker_compra, venta_may)
-                            comparativo_str = (
-                                f"\n\U0001F504 *Escenario Alternativo (Venta rápida):*\n"
-                                f"- Vender todo a: *{venta_may:.2f} VES*\n"
-                                f"- Margen Neto: {m['pct']:+.2f}%\n"
-                                f"- Ganancia Neta Total: *${m['usd']:.2f} USD* (~Bs.{m['usd'] * tasa_ves_alt:.2f})\n"
-                            )
-                    else:
-                        venta_frac = obtener_precio_p2p("BUY", top['asset'], trans_amount=8000)
-                        if venta_frac:
-                            m = _calc_margen(maker_compra, venta_frac)
-                            comparativo_str = (
-                                f"\n\U0001F504 *Escenario Alternativo (Venta fraccionada):*\n"
-                                f"- Vender en partes a: *{venta_frac:.2f} VES*\n"
-                                f"- Margen Neto: {m['pct']:+.2f}%\n"
-                                f"- Ganancia Neta Total: *${m['usd']:.2f} USD* (~Bs.{m['usd'] * tasa_ves_alt:.2f})\n"
-                            )
+                    venta_may = obtener_precio_p2p("BUY", top['asset'], trans_amount=0)
+                    if venta_may:
+                        m = _calc_margen(maker_compra, venta_may)
+                        comparativo_str = (
+                            f"\n\U0001F504 *Escenario Alternativo (Vender todo de golpe):*\n"
+                            f"- Vender todo a: *{venta_may:.2f} VES*\n"
+                            f"- Margen Neto: {m['pct']:+.2f}%\n"
+                            f"- Ganancia Neta Total: *${m['usd']:.2f} USD* (~Bs.{m['usd'] * tasa_ves_alt:.2f})\n"
+                        )
 
                     warning_msg = ""
                     if CONFIG["capital"] < MIN_AD_AMOUNT:
