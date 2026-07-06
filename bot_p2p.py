@@ -184,15 +184,16 @@ CONFIG = {
 }
 
 WHITELIST = set()
+WHITELIST_USERNAMES = set()
 _whitelist_raw = os.getenv("USER_WHITELIST", "").strip()
 if _whitelist_raw:
     for cid in _whitelist_raw.split(","):
-        cid = cid.strip()
+        cid = cid.strip().lstrip("@")
         if cid:
             try:
                 WHITELIST.add(int(cid))
             except ValueError:
-                pass
+                WHITELIST_USERNAMES.add(cid.lower())
 CONFIG_POR_CHAT = {}
 
 def _es_master(chat_id):
@@ -3001,6 +3002,12 @@ def polling_telegram():
                     procesar_callback(update["callback_query"])
                 elif "message" in update:
                     msg = update["message"]
+                    # Auto-registrar whitelist por username
+                    if WHITELIST_USERNAMES:
+                        user = msg.get("from", {})
+                        uname = user.get("username", "")
+                        if uname and uname.lower() in WHITELIST_USERNAMES:
+                            WHITELIST.add(msg["chat"]["id"])
                     # Detectar nuevos miembros en el canal
                     if "new_chat_members" in msg and msg["chat"]["id"] == int(TELEGRAM_CHANNEL_ID):
                         for member in msg["new_chat_members"]:
