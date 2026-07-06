@@ -469,6 +469,7 @@ def _scrapear_subastas():
     # Dedup: evitar reenviar mensajes identicos
     if not hasattr(_scrapear_subastas, "sent_hashes"):
         _scrapear_subastas.sent_hashes = set()
+        _scrapear_subastas._init_silent = True
 
     BANCOS = {
         "BBVA": "BBVA",
@@ -561,69 +562,48 @@ def _scrapear_subastas():
             usd_rate = _parse_num(usd_m.group(1))
 
         hora_str = datetime.now(VENEZUELA_TZ).strftime('%H:%M')
-
         import random as _rnd
 
         if tiene_banco:
             banco_str = " | ".join(bancos_detectados)
-            action = None
-            if "ACREDITANDO" in msg_upper or "ACREDITARON" in msg_upper:
-                action = _rnd.choice([
-                    "Acreditando pagos del día",
-                    "Procesando acreditaciones",
-                    "Realizando acreditaciones bancarias",
-                    "Acreditando depósitos",
-                ])
-            elif "APROBANDO" in msg_upper:
-                action = _rnd.choice([
-                    "Aprobando solicitudes",
-                    "Procesando órdenes aprobadas",
-                    "Órdenes en proceso de aprobación",
-                    "Validando operaciones cambiarias",
-                ])
-            elif "RECHAZANDO" in msg_upper:
-                action = _rnd.choice([
-                    "Rechazando solicitudes",
-                    "Devolviendo órdenes sin procesar",
-                    "Órdenes siendo rechazadas",
-                ])
-            elif "PACTANDO" in msg_upper:
-                action = _rnd.choice([
-                    "Definiendo montos de intervención",
-                    "Pactando montos del día",
-                    "Estableciendo montos operativos",
-                ])
-            elif "MESA DE CAMBIO" in msg_upper:
-                action = _rnd.choice([
-                    "Mesa de cambio operativa",
-                    "Cambio electrónico disponible",
-                    "Plataforma de cambio activa",
-                    "Sistema de cambio habilitado",
-                ])
-            elif any(w in msg_upper for w in ["ACTIVO", "ACTIVA", "ABIERTA", "CONTINUA", "MENUDEO"]):
-                action = _rnd.choice([
-                    "Intervención activa",
-                    "Operativo disponible",
-                    "Servicio habilitado",
-                    "Sistema operativo",
-                ])
-            elif "CERRADA" in msg_upper:
-                action = _rnd.choice([
-                    "Intervención finalizada",
-                    "Operativo cerrado",
-                    "Servicio suspendido",
-                    "Sistema fuera de línea",
-                ])
 
-            inicio = _rnd.choice([
-                f"🏦 *{banco_str}*",
-                f"🏦 *{banco_str}* — {action}" if action else f"🏦 *{banco_str}*"
-            ])
-            lines = [inicio]
+            if "INTERVENCIÓN DIGITAL ACTIVA" in msg_upper or "INTERVENCION DIGITAL ACTIVA" in msg_upper or "MESA DE CAMBIO" in msg_upper or "MENUDEO" in msg_upper:
+                if any(w in msg_upper for w in ["CERRADA"]):
+                    estado = "CERRADA"
+                else:
+                    estado = "ABIERTA"
+                if "DIGITAL" in msg_upper:
+                    action = f"INTERVENCIÓN DIGITAL {estado}"
+                elif "MESA DE CAMBIO" in msg_upper:
+                    action = f"MESA DE CAMBIO {estado}"
+                elif "MENUDEO" in msg_upper:
+                    action = f"MENUDEO {estado}"
+                else:
+                    action = f"INTERVENCIÓN CAMBIARIA {estado}"
+            elif "ACTIVO" in msg_upper or "ACTIVA" in msg_upper or "ABIERTA" in msg_upper or "CONTINUA" in msg_upper:
+                if "CERRADA" in msg_upper:
+                    action = "INTERVENCIÓN CAMBIARIA CERRADA"
+                else:
+                    action = "INTERVENCIÓN CAMBIARIA ABIERTA"
+            elif "CERRADA" in msg_upper:
+                action = "INTERVENCIÓN CAMBIARIA CERRADA"
+            elif "ACREDITANDO" in msg_upper or "ACREDITARON" in msg_upper:
+                action = "ACREDITANDO ÓRDENES"
+            elif "APROBANDO" in msg_upper:
+                action = "APROBANDO ÓRDENES"
+            elif "RECHAZANDO" in msg_upper:
+                action = "RECHAZANDO ÓRDENES"
+            elif "PACTANDO" in msg_upper:
+                action = "PACTANDO MONTO"
+            else:
+                action = ""
+
+            accion_str = f" {action}" if action else ""
+            lines = [f"🏦 *{banco_str}{accion_str}*"]
             if tasa_limpia:
-                lines.append(f"💱 Cotización: Bs. {tasa_limpia}")
+                lines.append(f"💱 Tasa: Bs. {tasa_limpia}")
             if minimo and maximo:
-                lines.append(f"📊 Desde ${minimo} hasta ${maximo}")
+                lines.append(f"📊 Rango: ${minimo} — ${maximo}")
             elif minimo:
                 lines.append(f"📊 Mínimo: ${minimo}")
             elif maximo:
@@ -668,9 +648,16 @@ def _scrapear_subastas():
             lines.append(text)
             lines.append(f"⏰ {hora_str}")
 
+        if getattr(_scrapear_subastas, "_init_silent", False):
+            _scrapear_subastas.sent_hashes.add(msg_hash)
+            continue
         _send_channel("\n".join(lines), parse_mode="Markdown")
         _scrapear_subastas.sent_hashes.add(msg_hash)
         print(f"[Subastas] Enviado: {' | '.join(bancos_detectados) if tiene_banco else 'BCV'}", flush=True)
+
+    if getattr(_scrapear_subastas, "_init_silent", False):
+        del _scrapear_subastas._init_silent
+        print(f"[Subastas] Init silencioso: {len(_scrapear_subastas.sent_hashes)} hashes precargados", flush=True)
 
 
 # Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
