@@ -2023,9 +2023,12 @@ def _resumen_diario():
 # ============================================================
 def procesar_mensaje(texto, chat_id):
     if (texto.startswith("/precio") or texto.startswith("/p2p") or texto.startswith("/mercado")):
-        grupo_id = CONFIG.get("grupo_chat_id", "")
-        if grupo_id and str(chat_id) == grupo_id:
+        if _es_master(chat_id) or _autorizado(chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": _precio_p2p_resumen(), "parse_mode": "Markdown"})
+        else:
+            grupo_id = CONFIG.get("grupo_chat_id", "")
+            if grupo_id and str(chat_id) == grupo_id:
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": _precio_p2p_resumen(), "parse_mode": "Markdown"})
         return
     if (texto.startswith("/ayuda") or texto.startswith("/comandos")):
         grupo_id = CONFIG.get("grupo_chat_id", "")
@@ -2093,7 +2096,8 @@ def procesar_mensaje(texto, chat_id):
                 else:
                     WHITELIST_USERNAMES.discard(val.lower())
             _guardar_whitelist()
-            _tg_call("sendMessage", {"chat_id": chat_id, "text": f"{'A\u00f1adido' if accion == 'add' else 'Quitado'}: {partes[2]}"})
+            label = "A\u00f1adido" if accion == "add" else "Quitado"
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": f"{label}: {partes[2]}"})
         return
     if not _autorizado(chat_id):
         return
@@ -2214,12 +2218,12 @@ def procesar_mensaje(texto, chat_id):
         else:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decir <mensaje>"})
         return
-    if texto.startswith("/help") or texto.startswith("/ayuda") or texto.startswith("/comandos") or texto.startswith("/start") or texto == "/":
+    if texto == "/" or texto.startswith("/start"):
         if not _es_master(chat_id):
-            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Bot de señales P2P. Usa los botones del menú.", "parse_mode": "Markdown"})
+            enviar_menu(chat_id)
             return
         _tg_call("sendMessage", {"chat_id": chat_id, "text":
-                "*Comandos del bot:*\n\n"
+            "*Comandos del bot:*\n\n"
                 "📋 `/menu` — Menú principal\n"
                 "🏷️ `/precio` — Precios P2P\n"
                 "📊 `/multi` — Multi-cripto\n"
