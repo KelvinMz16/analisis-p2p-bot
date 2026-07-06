@@ -626,10 +626,12 @@ def _precio_p2p_resumen():
     mejor_asset, mejor_margen = "", -999
     for a in ASSETS_VES:
         r = ULTIMOS.get(a)
-        if r and r.get("margen", -999) > mejor_margen:
+        if r and r.get("moneda") == "VES" and r.get("margen", -999) > mejor_margen:
+            if a == "USDT":
+                continue
             mejor_margen = r["margen"]
             mejor_asset = a
-    mejor = f"🔥 *Más vendido:* {mejor_asset} a {ULTIMOS[mejor_asset]['venta']:.2f} VES ({mejor_margen:+.2f}%)" if mejor_asset and mejor_asset != "USDT" else ""
+    mejor = f"🔥 *Mejor margen:* {mejor_asset} ({mejor_margen:+.2f}%)" if mejor_asset else ""
     
     oportunidad = "✅ *Hay oportunidad de arbitraje*" if spread is not None and spread >= CONFIG["margen_objetivo"] else "❌ Sin oportunidad en este momento"
     return (
@@ -705,7 +707,7 @@ HEADERS = {
 CLOUDFLARE_PROXY = os.getenv("CLOUDFLARE_PROXY", "https://ves-arbitraje-p2p.kelvinyohan14.workers.dev").rstrip("/")
 URL_BINANCE = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
 ASSETS_VES = ["USDT", "USDC", "BTC", "ETH", "BNB", "SOL"]
-ASSETS_USD = ["USDC", "BTC", "ETH", "BNB", "SOL"]  # se muestran en USD internacional, no P2P VES
+ASSETS_USD = ["BTC", "ETH", "BNB", "SOL"]  # se muestran en USD internacional, no P2P VES
 _COINGECKO_ASSET_IDS = {
     "USDC": "usd-coin",
     "BTC": "bitcoin",
