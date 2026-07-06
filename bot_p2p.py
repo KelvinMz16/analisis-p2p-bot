@@ -232,13 +232,7 @@ _cargar_chat_configs()
 _STARTUP_SILENT_UNTIL = time.time() + 120  # 2 min de silencio tras reinicio
 SEP = "\n━━━━━━━━━━━━━━━━━━━━━\n"
 
-# Cargar hashes de noticias ya enviadas
-try:
-    if os.path.exists(_NOTICIAS_HASH_PATH):
-        with open(_NOTICIAS_HASH_PATH, "r") as f:
-            _NOTICIAS_ENVIADAS = set(json.load(f))
-except Exception:
-    _NOTICIAS_ENVIADAS = set()
+
 
 def _broadcast(texto, parse_mode="Markdown"):
     _send_channel(texto, parse_mode)
@@ -416,9 +410,6 @@ _ULTIMA_HORA_ENVIADA = -1
 _SUBASTAS_ULTIMO_SCRAPED = 0
 _ULTIMO_SPREAD_BCV = 0  # timestamp del ultimo spread enviado
 _ULTIMO_TOP_OPORT = 0  # timestamp del ultimo top oportunidades enviado
-_ULTIMA_BUSQUEDA_NOTICIAS = 0
-_NOTICIAS_HASH_PATH = "noticias_enviadas.json"
-_NOTICIAS_ENVIADAS = set()
 
 
 def _top_oportunidades():
@@ -452,61 +443,6 @@ def _top_oportunidades():
         lines.append(bcv_str)
     _ULTIMO_TOP_OPORT = time.time()
     _send_channel("\n".join(lines))
-
-def _buscar_noticias_p2p():
-    global _ULTIMA_BUSQUEDA_NOTICIAS
-    ahora = time.time()
-    if ahora - _ULTIMA_BUSQUEDA_NOTICIAS < 43200:
-        return
-    _ULTIMA_BUSQUEDA_NOTICIAS = ahora
-    queries = ["Binance P2P Venezuela", "arbitraje P2P Venezuela", "USDT Venezuela", "criptomonedas Venezuela"]
-    from urllib.parse import quote
-    import hashlib, xml.etree.ElementTree as ET
-    noticias = []
-    for q in queries:
-        try:
-            url = f"https://news.google.com/rss/search?q={quote(q)}&hl=es-US&gl=US&ceid=US:es"
-            resp = requests.get(url, timeout=15)
-            if resp.status_code != 200:
-                continue
-            root = ET.fromstring(resp.content)
-            for item in root.findall('.//item'):
-                title = item.findtext('title', '')
-                link = item.findtext('link', '')
-                pub = item.findtext('pubDate', '')
-                if not title or not link:
-                    continue
-                h = hashlib.md5(link.encode()).hexdigest()
-                if h in _NOTICIAS_ENVIADAS:
-                    continue
-                _NOTICIAS_ENVIADAS.add(h)
-                noticias.append((title, link, pub))
-        except Exception as e:
-            print(f"[Noticias] Error en query '{q}': {e}", flush=True)
-    if not noticias:
-        return
-    noticias = noticias[:3]
-    master_id = int(TELEGRAM_CHAT_ID)
-    for title, link, pub in noticias:
-        try:
-            h = hashlib.md5(link.encode()).hexdigest()
-            fecha = pub[:16] if pub else ""
-            texto = f"📰 *{title}*\n\n📅 {fecha}\n\n¿Publicar en el canal?"
-            kb = json.dumps({"inline_keyboard": [
-                [{"text": "✅ Publicar", "callback_data": f"noti_ok:{h}"},
-                 {"text": "❌ Descartar", "callback_data": f"noti_no:{h}"}]
-            ]})
-            _tg_call("sendMessage", {
-                "chat_id": master_id, "text": texto,
-                "parse_mode": "Markdown", "reply_markup": kb
-            })
-        except Exception as e:
-            print(f"[Noticias] Error enviando noticia: {e}", flush=True)
-    try:
-        with open(_NOTICIAS_HASH_PATH, "w") as f:
-            json.dump(list(_NOTICIAS_ENVIADAS), f)
-    except Exception:
-        pass
 
 _ULTIMA_TASA_BCV = 0  # ultima tasa BCV conocida
 
@@ -2953,27 +2889,6 @@ def procesar_callback(cq):
             "reply_markup": kb
         }, ignore_400=True)
 
-    elif data.startswith("noti_ok:") or data.startswith("noti_no:"):
-        accion, h = data.split(":", 1)
-        try:
-            _tg_call("editMessageReplyMarkup", {
-                "chat_id": chat_id, "message_id": msg_id,
-                "reply_markup": json.dumps({"inline_keyboard": []})
-            })
-        except Exception:
-            pass
-        if accion == "noti_ok" and TELEGRAM_CHANNEL_ID:
-            msg = cq["message"]
-            text = msg.get("text") or msg.get("caption", "")
-            text = re.sub(r'\n\n.*\n\n¿Publicar en el canal\?$', '', text)
-            _tg_call("sendMessage", {
-                "chat_id": int(TELEGRAM_CHANNEL_ID),
-                "text": text + "\n\n📰 vía @arbitrajesp2pves",
-                "parse_mode": "Markdown"
-            })
-            _tg_call("sendMessage", {"chat_id": chat_id, "text": "✅ Publicado en el canal."})
-        else:
-            _tg_call("sendMessage", {"chat_id": chat_id, "text": "❌ Noticia descartada."})
     elif data == "menu":
         limpiar_refresh(chat_id)
         editar_mensaje(chat_id, msg_id,
@@ -3242,8 +3157,6 @@ def loop_monitoreo():
                     if not _SENALES_PENDIENTES[k].get("enviada"):
                         del _SENALES_PENDIENTES[k]
 
-            # Noticias P2P (cada 12h)
-            _buscar_noticias_p2p()
             # Verificar resultados de senales previas (cada 30 ciclos)
             if ciclo % 30 == 0:
                 _verificar_resultados_senales()
