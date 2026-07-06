@@ -2021,7 +2021,7 @@ def _resumen_diario():
 # ============================================================
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
-def procesar_mensaje(texto, chat_id):
+def procesar_mensaje(texto, chat_id, username=""):
     if (texto.startswith("/precio") or texto.startswith("/p2p") or texto.startswith("/mercado")):
         if _es_master(chat_id) or _autorizado(chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": _precio_p2p_resumen(), "parse_mode": "Markdown"})
@@ -2220,7 +2220,17 @@ def procesar_mensaje(texto, chat_id):
         return
     if texto == "/" or texto.startswith("/start"):
         if not _es_master(chat_id):
-            enviar_menu(chat_id)
+            display = f"@{username}" if username else ""
+            enviar_menu(chat_id, texto=
+                f"👋 *Bienvenido {display}!*\n\n"
+                f"💰 *Arbitraje P2P Venezuela*\n"
+                f"Monitoreo de spreads en Binance P2P VES\n\n"
+                f"Usa los botones del men\u00fa para:\n"
+                f"\U0001F4B0 Ver precios en vivo\n"
+                f"\u2699\ufe0f Ajustar capital y umbral\n"
+                f"\U0001F4C5 Historial y calculadora\n\n"
+                f"Selecciona una opci\u00f3n:"
+            )
             return
         _tg_call("sendMessage", {"chat_id": chat_id, "text":
             "*Comandos del bot:*\n\n"
@@ -2695,30 +2705,45 @@ def procesar_callback(cq):
         return
 
     if data == "ayuda":
-        editar_mensaje(chat_id, msg_id,
-            "*Comandos del bot:*\n\n"
-            "📋 `/menu` — Menú principal\n"
-            "🏷️ `/precio` — Precios P2P\n"
-            "📊 `/multi` — Multi-cripto\n"
-            "💰 `/capital` — Capital\n"
-            "🎯 `/umbral` — Umbral de alerta\n"
-            "📈 `/historial` — Historial\n"
-            "🔍 `/filtro` — Filtro\n"
-            "🔄 `/dex` — DEX\n"
-            "⏰ `/horarios` — Horarios\n"
-            "⚡ `/combo` — Combo\n"
-            "📉 `/mercado` — Mercado\n"
-            "🎯 `/precision` — Precisión\n"
-            "🧮 `/calc` — Calculadora\n\n"
-            "*Comandos de grupo (solo master):*\n"
-            "📢 `/decir <msg>` — Enviar texto al grupo\n"
-            "🖼️ `/decirimg <texto>` — Enviar imagen+texto al canal\n"
-            "🚫 `/ban <id> [horas]` — Banear usuario\n"
-            "✅ `/unban <id>` — Desbanear\n"
-            "🆔 `/groupid` — ID del chat actual\n"
-            "⚙️ `/setgrupo <id>` — Configurar grupo\n\n"
-            "💡 *Tip:* Usa los botones del menú como atajo."
-        )
+        if not _es_master(chat_id):
+            editar_mensaje(chat_id, msg_id,
+                "*Ayuda — Botones del menú:*\n\n"
+                "\U0001F4B0 *Precio* — Precio USDT en VES con spread bruto, comisiones y margen neto\n"
+                "\u2699\ufe0f *Capital* — Cambia el monto de capital para c\u00e1lculos\n"
+                "\U0001F3AF *Umbral* — Ajusta el % m\u00ednimo de margen para alertas\n"
+                "\U0001F6D2 *Filtro* — Cambia entre Mayorista/$5/$10/$20\n"
+                "\U0001F4C5 *Historial* — Precios de las \u00faltimas 24h con gr\u00e1fica\n"
+                "\U0001F9EE *Calc* — Calcula punto de equilibrio y ganancia neta\n"
+                "\U0001F504 *Actualizar* — Refresca los datos del men\u00fa\n\n"
+                "\u2753 *Tips:*\n"
+                "• Usa /precio para ver el mercado al instante\n"
+                "• Las alertas llegan autom\u00e1ticamente cuando hay oportunidad"
+            )
+        else:
+            editar_mensaje(chat_id, msg_id,
+                "*Comandos del bot:*\n\n"
+                "📋 `/menu` — Menú principal\n"
+                "🏷️ `/precio` — Precios P2P\n"
+                "📊 `/multi` — Multi-cripto\n"
+                "💰 `/capital` — Capital\n"
+                "🎯 `/umbral` — Umbral de alerta\n"
+                "📈 `/historial` — Historial\n"
+                "🔍 `/filtro` — Filtro\n"
+                "🔄 `/dex` — DEX\n"
+                "⏰ `/horarios` — Horarios\n"
+                "⚡ `/combo` — Combo\n"
+                "📉 `/mercado` — Mercado\n"
+                "🎯 `/precision` — Precisión\n"
+                "🧮 `/calc` — Calculadora\n\n"
+                "*Comandos de grupo (solo master):*\n"
+                "📢 `/decir <msg>` — Enviar texto al grupo\n"
+                "🖼️ `/decirimg <texto>` — Enviar imagen+texto al canal\n"
+                "🚫 `/ban <id> [horas]` — Banear usuario\n"
+                "✅ `/unban <id>` — Desbanear\n"
+                "🆔 `/groupid` — ID del chat actual\n"
+                "⚙️ `/setgrupo <id>` — Configurar grupo\n\n"
+                "💡 *Tip:* Usa los botones del menú como atajo."
+            )
         return
     if data == "precio":
         _render_precio(chat_id, msg_id)
@@ -3010,7 +3035,9 @@ def polling_telegram():
                         else:
                             _tg_call("sendMessage", {"chat_id": chat_id, "text": "No esperaba una foto. Usa /decirimg <texto> primero."})
                     elif "text" in msg:
-                        procesar_mensaje(msg["text"], msg["chat"]["id"])
+                        user = msg.get("from", {})
+                        uname = user.get("username", "") or user.get("first_name", "")
+                        procesar_mensaje(msg["text"], msg["chat"]["id"], uname)
         except Exception as e:
             print(f"Error en polling: {e}", flush=True)
         time.sleep(3)
