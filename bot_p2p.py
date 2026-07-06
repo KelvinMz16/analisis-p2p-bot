@@ -623,26 +623,33 @@ def _precio_p2p_resumen():
     spread_linea = f"📊 *Spread:* {spread:+.2f}%" if spread is not None else ""
     bcv = _obtener_tasa_bcv()
     bcv_linea = f"🏦 *BCV:* {bcv['tasa']:.2f} VES" if bcv and bcv.get('tasa') else ""
+    usdc = ULTIMOS.get("USDC", {}).get("moneda") == "VES" and ULTIMOS["USDC"]
+    usdc_linea = f"💵 *USDC*: Compra {ULTIMOS['USDC']['compra']:.2f} | Venta {ULTIMOS['USDC']['venta']:.2f} VES" if usdc and ULTIMOS["USDC"].get("compra") else ""
     mejor_asset, mejor_margen = "", -999
     for a in ASSETS_VES:
         r = ULTIMOS.get(a)
         if r and r.get("moneda") == "VES" and r.get("margen", -999) > mejor_margen:
-            if a == "USDT":
+            if a in ("USDT", "USDC"):
                 continue
             mejor_margen = r["margen"]
             mejor_asset = a
     mejor = f"🔥 *Mejor margen:* {mejor_asset} ({mejor_margen:+.2f}%)" if mejor_asset else ""
     
     oportunidad = "✅ *Hay oportunidad de arbitraje*" if spread is not None and spread >= CONFIG["margen_objetivo"] else "❌ Sin oportunidad en este momento"
-    return (
-        f"💰 *MERCADO P2P VENEZUELA*\n"
-        f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"
-        f"{precio_linea}\n"
-        f"{spread_linea}\n"
-        f"{bcv_linea}\n"
-        f"{mejor}\n\n"
-        f"{oportunidad}"
-    )
+    partes = [
+        f"💰 *MERCADO P2P VENEZUELA*",
+        f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
+        f"{precio_linea}",
+    ]
+    if usdc_linea:
+        partes.append(usdc_linea)
+    partes.append(spread_linea)
+    partes.append(bcv_linea)
+    if mejor:
+        partes.append(mejor)
+    partes.append("")
+    partes.append(oportunidad)
+    return "\n".join(partes)
 
 
 def guardar_config_local():
