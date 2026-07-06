@@ -185,6 +185,13 @@ CONFIG = {
 
 WHITELIST = set()
 WHITELIST_USERNAMES = set()
+CONFIG_POR_CHAT = {}
+
+# Cargar whitelist persistida
+_persisted = _config_local.get("whitelist_ids", [])
+if isinstance(_persisted, list):
+    WHITELIST.update(int(x) for x in _persisted if str(x).isdigit())
+# Cargar usernames del env (sigue siendo util para config inicial)
 _whitelist_raw = os.getenv("USER_WHITELIST", "").strip()
 if _whitelist_raw:
     for cid in _whitelist_raw.split(","):
@@ -194,7 +201,10 @@ if _whitelist_raw:
                 WHITELIST.add(int(cid))
             except ValueError:
                 WHITELIST_USERNAMES.add(cid.lower())
-CONFIG_POR_CHAT = {}
+
+def _guardar_whitelist():
+    CONFIG["whitelist_ids"] = list(WHITELIST)
+    guardar_config_local()
 
 def _es_master(chat_id):
     return str(chat_id) == TELEGRAM_CHAT_ID
@@ -2057,6 +2067,34 @@ def procesar_mensaje(texto, chat_id):
         guardar_config_local()
         _tg_call("sendMessage", {"chat_id": chat_id, "text": f"Grupo configurado: `{grupo_id}`", "parse_mode": "Markdown"})
         return
+    if texto.startswith("/wl"):
+        if not _es_master(chat_id):
+            return
+        partes = texto.split()
+        if len(partes) < 2:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /wl add <id|@user> | /wl rm <id|@user> | /wl list"})
+            return
+        accion = partes[1]
+        if accion == "list":
+            ids = ", ".join(str(x) for x in WHITELIST) if WHITELIST else "(vac\u00eda)"
+            users = ", ".join(WHITELIST_USERNAMES) if WHITELIST_USERNAMES else "(ninguno)"
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": f"IDs: {ids}\nUsuarios: {users}"})
+        elif accion in ("add", "rm") and len(partes) >= 3:
+            val = partes[2].strip().lstrip("@")
+            try:
+                uid = int(val)
+                if accion == "add":
+                    WHITELIST.add(uid)
+                else:
+                    WHITELIST.discard(uid)
+            except ValueError:
+                if accion == "add":
+                    WHITELIST_USERNAMES.add(val.lower())
+                else:
+                    WHITELIST_USERNAMES.discard(val.lower())
+            _guardar_whitelist()
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": f"{'A\u00f1adido' if accion == 'add' else 'Quitado'}: {partes[2]}"})
+        return
     if not _autorizado(chat_id):
         return
     estado = ESTADOS_USUARIO.get(chat_id, {})
@@ -2923,6 +2961,7 @@ def polling_telegram():
                         uname = user.get("username", "")
                         if uname and uname.lower() in WHITELIST_USERNAMES:
                             WHITELIST.add(msg["chat"]["id"])
+                            _guardar_whitelist()
                     # Detectar nuevos miembros en el canal
                     if "new_chat_members" in msg and msg["chat"]["id"] == int(TELEGRAM_CHANNEL_ID):
                         for member in msg["new_chat_members"]:
