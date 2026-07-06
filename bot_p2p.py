@@ -689,9 +689,15 @@ def _precio_p2p_resumen():
     usdt = ULTIMOS.get("USDT", {})
     if not usdt.get("compra"):
         return "No hay datos disponibles."
-    precio_linea = f"💵 *USDT*: Compra {usdt['compra']:.2f} | Venta {usdt['venta']:.2f} VES"
-    spread = usdt.get("margen")
-    spread_linea = f"📊 *Spread:* {spread:+.2f}%" if spread is not None else ""
+    compra = usdt["compra"]
+    venta = usdt["venta"]
+    margen_neto = usdt.get("margen")
+    spread_bruto = ((venta - compra) / compra) * 100 if compra else 0
+    comision_total_pct = (COMISION * 2 + COMISION_BANCO) * 100
+
+    precio_linea = f"💵 *USDT*: Compra {compra:.2f} | Venta {venta:.2f} VES"
+    umbral = CONFIG["margen_objetivo"]
+
     bcv = _obtener_tasa_bcv()
     bcv_linea = f"🏦 *BCV:* {bcv['tasa']:.2f} VES" if bcv and bcv.get('tasa') else ""
     usdc = ULTIMOS.get("USDC", {}).get("moneda") == "VES" and ULTIMOS["USDC"]
@@ -705,8 +711,7 @@ def _precio_p2p_resumen():
             mejor_margen = r["margen"]
             mejor_asset = a
     mejor = f"🔥 *Mejor margen:* {mejor_asset} ({mejor_margen:+.2f}%)" if mejor_asset else ""
-    
-    oportunidad = "✅ *Hay oportunidad de arbitraje*" if spread is not None and spread >= CONFIG["margen_objetivo"] else "❌ Sin oportunidad en este momento"
+
     partes = [
         f"💰 *MERCADO P2P VENEZUELA*",
         f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
@@ -714,12 +719,23 @@ def _precio_p2p_resumen():
     ]
     if usdc_linea:
         partes.append(usdc_linea)
-    partes.append(spread_linea)
+    partes.append(f"")
+    partes.append(f"📈 *Spread bruto:* {spread_bruto:+.2f}%")
+    partes.append(f"💸 *Comisiones:* −{comision_total_pct:.2f}% (0.25%×2 + 0.30% banco)")
+    if margen_neto is not None:
+        partes.append(f"📊 *Margen neto:* {margen_neto:+.2f}%")
+    partes.append(f"🎯 *Umbral requerido:* {umbral:.1f}%")
     partes.append(bcv_linea)
     if mejor:
         partes.append(mejor)
     partes.append("")
-    partes.append(oportunidad)
+    if margen_neto is not None and margen_neto >= umbral:
+        partes.append("✅ *Hay oportunidad de arbitraje*")
+    elif margen_neto is not None and margen_neto > 0:
+        diff = umbral - margen_neto
+        partes.append(f"❌ El margen neto ({margen_neto:+.2f}%) no cubre las comisiones. Faltan {diff:.2f}% para alcanzar el umbral de {umbral:.0f}%.")
+    else:
+        partes.append("❌ Sin oportunidad en este momento")
     return "\n".join(partes)
 
 
