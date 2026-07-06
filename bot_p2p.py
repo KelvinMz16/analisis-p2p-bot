@@ -283,12 +283,14 @@ def _loop_detectar_miembros():
         time.sleep(5)
 
 def _loop_scrapear_subastas():
+    """Hilo separado para scraping de subastas cada 2s en manana, 2min en tarde."""
     time.sleep(3)
+    print("[Subastas] Hilo iniciado", flush=True)
     while True:
         try:
             _scrapear_subastas()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Subastas] Error en hilo: {e}", flush=True)
         time.sleep(2)
 
 def _obtener_tasa_bcv():
@@ -3096,6 +3098,8 @@ def loop_monitoreo():
             _verificar_cambio_tasa_bcv()
 
                 # ============================================================
+            # Subastas BCV (respaldo desde ciclo principal + hilo separado)
+            _scrapear_subastas()
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
             # ============================================================
             for nk in DEX_NETWORKS:
