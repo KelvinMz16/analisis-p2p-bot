@@ -284,13 +284,19 @@ def _loop_detectar_miembros():
 
 def _loop_scrapear_subastas():
     """Hilo separado para scraping de subastas cada 2s en manana, 2min en tarde."""
+    import sys
     time.sleep(3)
     print("[Subastas] Hilo iniciado", flush=True)
+    sys.stderr.write("[Subastas] Hilo iniciado (stderr)\n")
+    sys.stderr.flush()
     while True:
         try:
             _scrapear_subastas()
         except Exception as e:
-            print(f"[Subastas] Error en hilo: {e}", flush=True)
+            msg = f"[Subastas] Error en hilo: {e}"
+            print(msg, flush=True)
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
         time.sleep(2)
 
 def _obtener_tasa_bcv():
@@ -448,6 +454,7 @@ def _scrapear_subastas():
         return
     _SUBASTAS_ULTIMO_SCRAPED = ahora
     print("[Subastas] Scraping...", flush=True)
+    import sys; sys.stderr.write("[Subastas] Scraping (stderr)\n"); sys.stderr.flush()
 
     try:
         proxy_tme = f"{_PROXY_HTTP.rstrip('/')}/t-me/s/subastasBCV"
@@ -653,11 +660,15 @@ def _scrapear_subastas():
             continue
         _send_channel("\n".join(lines), parse_mode="Markdown")
         _scrapear_subastas.sent_hashes.add(msg_hash)
-        print(f"[Subastas] Enviado: {' | '.join(bancos_detectados) if tiene_banco else 'BCV'}", flush=True)
+        msgenv = f"[Subastas] Enviado: {' | '.join(bancos_detectados) if tiene_banco else 'BCV'}"
+        print(msgenv, flush=True)
+        import sys; sys.stderr.write(msgenv + "\n"); sys.stderr.flush()
 
     if getattr(_scrapear_subastas, "_init_silent", False):
         del _scrapear_subastas._init_silent
-        print(f"[Subastas] Init silencioso: {len(_scrapear_subastas.sent_hashes)} hashes precargados", flush=True)
+        msg = f"[Subastas] Init silencioso: {len(_scrapear_subastas.sent_hashes)} hashes"
+        print(msg, flush=True)
+        import sys; sys.stderr.write(msg + "\n"); sys.stderr.flush()
 
 
 # Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
@@ -3085,8 +3096,6 @@ def loop_monitoreo():
             _verificar_cambio_tasa_bcv()
 
                 # ============================================================
-            # Subastas BCV (respaldo desde ciclo principal + hilo separado)
-            _scrapear_subastas()
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
             # ============================================================
             for nk in DEX_NETWORKS:
