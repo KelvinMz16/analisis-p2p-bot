@@ -450,8 +450,8 @@ def _scrapear_subastas():
     print("[Subastas] Scraping...", flush=True)
 
     try:
-        proxy_tme = f"{CLOUDFLARE_PROXY.rstrip('/')}/t-me/s/subastasBCV"
-        resp = requests.get(proxy_tme, timeout=15, headers={
+        proxy_tme = f"{_PROXY_HTTP.rstrip('/')}/t-me/s/subastasBCV"
+        resp = requests.get(proxy_tme, timeout=30, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
         if resp.status_code != 200:
