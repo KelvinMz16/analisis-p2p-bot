@@ -229,6 +229,7 @@ def _cargar_chat_configs():
 _cargar_chat_configs()
 
 _STARTUP_SILENT_UNTIL = time.time() + 120  # 2 min de silencio tras reinicio
+SEP = "\n━━━━━━━━━━━━━━━━━━━━━\n"
 
 def _broadcast(texto, parse_mode="Markdown"):
     _send_channel(texto, parse_mode)
@@ -260,15 +261,18 @@ def _verificar_nuevos_miembros():
         prev = CONFIG.get("ultimo_conteo_miembros", 0)
         if prev and nuevo > prev:
             _send_channel(
-                "👋 *¡Bienvenido al canal!*\n\n"
-                "📊 *Contenido del canal:*\n"
-                "• 💵 Precios USDT/USDC en VES en vivo (P2P Binance)\n"
+                "👋 *¡Bienvenido al canal!*\n"
+                f"{SEP}"
+                "📊 *¿Qué ofrecemos?*\n"
+                "• 💵 Precios USDT/USDC en VES en vivo\n"
                 "• 📈 Alertas de arbitraje cuando el spread da margen\n"
-                "• 🏦 Tasa BCV actualizada en tiempo real\n"
-                "• 📊 Resumen diario del mercado a las 7am\n\n"
+                "• 🏦 Tasas BCV y subastas bancarias en tiempo real\n"
+                "• 📊 Resumen diario del mercado a las 7am\n"
+                f"{SEP}"
                 "💬 *Grupo de discusión:*\n"
-                "Únete para escribir /precio y ver el mercado al instante\n"
-                "👉 https://t.me/arbitrajesp2p\n\n"
+                "Únete para interactuar y usar /precio al instante\n"
+                "👉 https://t.me/arbitrajesp2p\n"
+                f"{SEP}"
                 "📌 *Reglas:* No spam, no scams, respeto mutuo.\n\n"
                 "¡Aprovecha las oportunidades del mercado P2P!"
             )
@@ -423,10 +427,12 @@ def _top_oportunidades():
     bcv = _obtener_tasa_bcv()
     bcv_str = f"🏦 *BCV:* {bcv['tasa']:.2f} VES" if bcv and bcv.get('tasa') else ""
     lines = ["🔥 *TOP OPORTUNIDADES P2P*",
-             f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}\n"]
+             f"🕐 {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}"]
+    lines.append(SEP)
     for i, (a, m, c, v) in enumerate(ops[:3], 1):
-        lines.append(f"{i}. *{a}:* +{m:.2f}% (Compra {c:.2f} | Venta {v:.2f} VES)")
-    lines.append("")
+        lines.append(f"{i}. *{a}:* +{m:.2f}%")
+        lines.append(f"   Compra {c:.2f} | Venta {v:.2f} VES")
+    lines.append(SEP)
     usdt_str = f"💵 *USDT:* Compra {usdt['compra']:.2f} | Venta {usdt['venta']:.2f} VES" if usdt.get("compra") else ""
     if usdt_str:
         lines.append(usdt_str)
@@ -723,7 +729,7 @@ def _precio_p2p_resumen():
     ]
     if usdc_linea:
         partes.append(usdc_linea)
-    partes.append("")
+    partes.append(SEP)
     partes.append(f"📈 *Spread bruto:* {spread_bruto:+.2f}%")
     partes.append(f"💸 *Comisiones:* −{comision_total_pct:.2f}% (0.25%×2 + 0.30% banco)")
     if margen_neto is not None:
@@ -732,7 +738,7 @@ def _precio_p2p_resumen():
     partes.append(bcv_linea)
     if mejor:
         partes.append(mejor)
-    partes.append("")
+    partes.append(SEP)
     partes.append(oportunidad)
     return "\n".join(partes)
 
@@ -1964,6 +1970,8 @@ def _resumen_diario():
     if bcv and bcv.get("tasa"):
         lines.append(f"🏦 *BCV:* {bcv['tasa']:.2f} VES/USD")
 
+    lines.append(SEP)
+
     for asset in ["USDT", "USDC"]:
         r = calcular_margen(asset)
         if not r:
@@ -1982,14 +1990,15 @@ def _resumen_diario():
         avg_c = sum(precios_c) / len(precios_c)
         spark = _sparkline(precios_c, 16)
         lines.append(f"\n📈 *USDT 24h:* `{spark}`")
-        lines.append(f"   Mín: {min_c:.2f} | Máx: {max_c:.2f} | Prom: {avg_c:.2f} VES")
+        lines.append(f"   📉 Mín: {min_c:.2f} | 📈 Máx: {max_c:.2f} | 📊 Prom: {avg_c:.2f} VES")
 
+    lines.append(SEP)
     r_usdt = calcular_margen("USDT")
     if r_usdt:
         usdt_spread = ((r_usdt["venta"] - r_usdt["compra"]) / r_usdt["compra"]) * 100
         hay_arbitraje = usdt_spread >= CONFIG["margen_objetivo"]
-        lines.append(f"\n📊 *Spread actual USDT:* {usdt_spread:+.2f}%")
-        lines.append(f"{'✅ *Hay oportunidad de arbitraje*' if hay_arbitraje else '❌ *Sin oportunidad* — spread bajo'}")
+        lines.append(f"📊 *Spread:* {usdt_spread:+.2f}%")
+        lines.append(f"{'✅ *Hay oportunidad de arbitraje*' if hay_arbitraje else '❌ *Sin oportunidad*'}")
 
     msg = "\n".join(lines)
     _send_channel(msg, parse_mode="Markdown")
@@ -3037,7 +3046,8 @@ def loop_monitoreo():
 
                     texto_alerta = (
                         f"\U0001F514 *ALERTA P2P DETALLADA*\n"
-                        f"Activo: *{top['asset']}* | Margen neto actual: *{top['margen']:+.2f}%* \u2705 RENTABLE\n\n"
+                        f"Activo: *{top['asset']}* | Margen neto: *{top['margen']:+.2f}%* \u2705 RENTABLE\n"
+                        f"{SEP}"
                         f"\U0001F449 *Pasos sugeridos:*\n"
                         f"1\ufe0f\u20e3 *COMPRA:* Publica un anuncio de *COMPRA* (pagas Bs y recibes {top['asset']}) con precio fijado en *{top['compra']:.2f} VES*.\n"
                         f"   - Configura el límite mínimo de tu anuncio en: *{limite_anuncio}*.\n"
@@ -3133,7 +3143,7 @@ def loop_monitoreo():
             h = datetime.now(VENEZUELA_TZ).hour
             if h != _ULTIMA_HORA_ENVIADA:
                 _ULTIMA_HORA_ENVIADA = h
-                if h >= 7:
+                if h >= 7 and h % 2 == 1:
                     precio_msg = _precio_p2p_resumen()
                     enviar_menu(texto=precio_msg)
                     _send_channel(precio_msg)
@@ -3154,9 +3164,38 @@ if __name__ == "__main__":
     guardar_config_local()
 
     if TELEGRAM_TOKEN:
-        threading.Thread(target=polling_telegram, daemon=True).start()
         if TELEGRAM_CHANNEL_ID:
             threading.Thread(target=_loop_detectar_miembros, daemon=True).start()
+            try:
+                resp = _tg_call("sendMessage", {
+                    "chat_id": int(TELEGRAM_CHANNEL_ID),
+                    "text": (
+                        "📌 *Bienvenido a Arbitraje P2P Señales VES*\n"
+                        f"{SEP}"
+                        "📊 *Contenido del canal:*\n"
+                        "• 💵 Precios USDT/USDC VES en vivo (cada 2h)\n"
+                        "• 🚨 Alertas de arbitraje cuando hay oportunidad\n"
+                        "• 🏦 Subastas BCV y tasas bancarias en tiempo real\n"
+                        "• 📈 Resumen diario del mercado a las 7am\n"
+                        "• 🔥 Top oportunidades del momento\n"
+                        f"{SEP}"
+                        "💬 *Grupo de discusión:* @arbitrajesp2p\n"
+                        "📱 *Horario:* Lun-Dom 7am a 11pm 🕐\n"
+                        f"{SEP}"
+                        "⚠️ *Informativo — No es asesoría financiera*"
+                    ),
+                    "parse_mode": "Markdown"
+                })
+                if resp and resp.get("ok"):
+                    msg_id = resp["result"]["message_id"]
+                    _tg_call("pinChatMessage", {
+                        "chat_id": int(TELEGRAM_CHANNEL_ID),
+                        "message_id": msg_id,
+                        "disable_notification": True,
+                    })
+            except Exception as e:
+                print(f"Error al fijar mensaje: {e}", flush=True)
+        threading.Thread(target=polling_telegram, daemon=True).start()
         threading.Thread(target=_loop_scrapear_subastas, daemon=True).start()
         time.sleep(2)
         extra = ""
