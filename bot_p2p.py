@@ -1,5 +1,5 @@
 import threading
-import json, os, ssl, time
+import json, os, ssl, time, re
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 import requests
@@ -488,36 +488,17 @@ def _buscar_noticias_p2p():
     master_id = int(TELEGRAM_CHAT_ID)
     for title, link, pub in noticias:
         try:
-            img_url = None
-            try:
-                resp2 = requests.get(link, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-                if resp2.status_code == 200:
-                    import re
-                    m = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', resp2.text)
-                    if m:
-                        img_url = m.group(1)
-                    else:
-                        m = re.search(r'<meta\s+content="([^"]+)"\s+property="og:image"', resp2.text)
-                        if m:
-                            img_url = m.group(1)
-            except Exception:
-                pass
-            caption = f"📰 *{title}*\n\nℹ️ {pub}\n\n¿Publicar en el canal?"
+            h = hashlib.md5(link.encode()).hexdigest()
+            fecha = pub[:16] if pub else ""
+            texto = f"📰 *{title}*\n\n📅 {fecha}\n\n¿Publicar en el canal?"
             kb = json.dumps({"inline_keyboard": [
                 [{"text": "✅ Publicar", "callback_data": f"noti_ok:{h}"},
                  {"text": "❌ Descartar", "callback_data": f"noti_no:{h}"}]
             ]})
-            if img_url:
-                _tg_call("sendPhoto", {
-                    "chat_id": master_id, "photo": img_url,
-                    "caption": caption, "parse_mode": "Markdown",
-                    "reply_markup": kb
-                })
-            else:
-                _tg_call("sendMessage", {
-                    "chat_id": master_id, "text": caption,
-                    "parse_mode": "Markdown", "reply_markup": kb
-                })
+            _tg_call("sendMessage", {
+                "chat_id": master_id, "text": texto,
+                "parse_mode": "Markdown", "reply_markup": kb
+            })
         except Exception as e:
             print(f"[Noticias] Error enviando noticia: {e}", flush=True)
     try:
@@ -2972,29 +2953,16 @@ def procesar_callback(cq):
             })
         except Exception:
             pass
-        if accion == "noti_ok":
+        if accion == "noti_ok" and TELEGRAM_CHANNEL_ID:
             msg = cq["message"]
-            photo = msg.get("photo")
-            caption = msg.get("caption", "")
-            if photo and TELEGRAM_CHANNEL_ID:
-                file_id = photo[-1]["file_id"]
-                _tg_call("sendPhoto", {
-                    "chat_id": int(TELEGRAM_CHANNEL_ID),
-                    "photo": file_id,
-                    "caption": caption.replace("\n\nℹ️ ", "\n\n").replace("\n\n¿Publicar en el canal?", ""),
-                    "parse_mode": "Markdown"
-                })
-                _tg_call("sendMessage", {"chat_id": chat_id, "text": "✅ Publicado en el canal."})
-            elif TELEGRAM_CHANNEL_ID:
-                text = msg.get("text", caption).replace("\n\nℹ️ ", "\n\n").replace("\n\n¿Publicar en el canal?", "")
-                _tg_call("sendMessage", {
-                    "chat_id": int(TELEGRAM_CHANNEL_ID),
-                    "text": text,
-                    "parse_mode": "Markdown"
-                })
-                _tg_call("sendMessage", {"chat_id": chat_id, "text": "✅ Publicado en el canal."})
-            else:
-                _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay canal configurado."})
+            text = msg.get("text") or msg.get("caption", "")
+            text = re.sub(r'\n\n.*\n\n¿Publicar en el canal\?$', '', text)
+            _tg_call("sendMessage", {
+                "chat_id": int(TELEGRAM_CHANNEL_ID),
+                "text": text + "\n\n📰 vía @arbitrajesp2pves",
+                "parse_mode": "Markdown"
+            })
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "✅ Publicado en el canal."})
         else:
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "❌ Noticia descartada."})
     elif data == "menu":
