@@ -180,6 +180,7 @@ CONFIG = {
     "monto_filtro": _safe_int(_config_local.get("monto_filtro", os.getenv("MONTO_FILTRO", "0")), 0),
     "default_crypto": _config_local.get("default_crypto", os.getenv("DEFAULT_CRYPTO", "USDT")),
     "grupo_chat_id": _config_local.get("grupo_chat_id", os.getenv("GRUPO_CHAT_ID", "")),
+    "ultimo_conteo_miembros": _safe_int(_config_local.get("ultimo_conteo_miembros", "0"), 0),
 }
 
 WHITELIST = set()
@@ -240,7 +241,7 @@ def _send_channel(texto, parse_mode="Markdown"):
 
 
 def _verificar_nuevos_miembros():
-    global _ULTIMO_CONTEO_MIEMBROS, _ULTIMO_CONTEO_TS
+    global _ULTIMO_CONTEO_TS
     if not TELEGRAM_CHANNEL_ID:
         return
     ahora = time.time()
@@ -252,8 +253,8 @@ def _verificar_nuevos_miembros():
         if not resp or not resp.get("ok"):
             return
         nuevo = resp["result"].get("member_count", 0)
-        if _ULTIMO_CONTEO_MIEMBROS and nuevo > _ULTIMO_CONTEO_MIEMBROS:
-            diff = nuevo - _ULTIMO_CONTEO_MIEMBROS
+        prev = CONFIG.get("ultimo_conteo_miembros", 0)
+        if prev and nuevo > prev:
             _send_channel(
                 "👋 *¡Bienvenido al canal!*\n\n"
                 "📊 *Contenido del canal:*\n"
@@ -267,7 +268,8 @@ def _verificar_nuevos_miembros():
                 "📌 *Reglas:* No spam, no scams, respeto mutuo.\n\n"
                 "¡Aprovecha las oportunidades del mercado P2P!"
             )
-        _ULTIMO_CONTEO_MIEMBROS = nuevo
+        CONFIG["ultimo_conteo_miembros"] = nuevo
+        guardar_config_local()
     except Exception:
         pass
 
@@ -375,7 +377,6 @@ def _verificar_cambio_tasa_bcv():
 # SCRAPER SUBASTAS BCV - Telegram @subastasBCV
 # ============================================================
 _SUBASTAS_ESTADO = {}  # banco -> {"status": "activa"|"cerrada", "ts": timestamp}
-_ULTIMO_CONTEO_MIEMBROS = 0
 _ULTIMO_CONTEO_TS = 0
 _ULTIMA_HORA_ENVIADA = -1
 _SUBASTAS_ULTIMO_SCRAPED = 0
@@ -426,11 +427,11 @@ def _obtener_intervalo_subastas():
         return 0    # 11pm-7am: no scrapear
 
 def _scrapear_subastas():
-    """Scrapea el canal publico @subastasBCV y detecta cambios de estado."""
-    global _SUBASTAS_ULTIMO_SCRAPED, _SUBASTAS_ESTADO
+    """Scrapea el canal publico @subastasBCV y reenvia mensajes bancarios al canal."""
+    global _SUBASTAS_ULTIMO_SCRAPED
     intervalo = _obtener_intervalo_subastas()
     if intervalo == 0:
-        return  # noche: no scrapear
+        return
     ahora = time.time()
     if ahora - _SUBASTAS_ULTIMO_SCRAPED < intervalo:
         return
@@ -449,12 +450,15 @@ def _scrapear_subastas():
         print(f"[Subastas] Error scraping via proxy: {e}", flush=True)
         return
 
-    import re
+    import re, html as html_mod
     mensajes = re.findall(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', html, re.DOTALL)
     if not mensajes:
         return
 
-    # Lista completa de bancos (nombres cortos y largos)
+    # Dedup: evitar reenviar mensajes identicos
+    if not hasattr(_scrapear_subastas, "sent_hashes"):
+        _scrapear_subastas.sent_hashes = set()
+
     BANCOS = {
         "BBVA": "BBVA",
         "BANCAMIGA": "BANCAMIGA",
@@ -477,124 +481,185 @@ def _scrapear_subastas():
         "BDV": "BDV",
         "BANCO DE VENEZUELA": "BDV",
         "BANESCO": "BANESCO",
-        "BANCO MERCANTIL": "MERCANTIL",
+        "ZINLI": "ZINLI",
     }
 
+    import hashlib
     for msg_html in mensajes[-30:]:
-        msg = re.sub(r'<[^>]+>', ' ', msg_html).strip()
+        raw = html_mod.unescape(msg_html)
+        raw = re.sub(r'<br\s*/?>', '\n', raw)
+        msg = re.sub(r'<[^>]+>', ' ', raw).strip()
         msg = re.sub(r'\s+', ' ', msg)
+        msg = msg.replace('\u200b', '')
+        if len(msg) < 10:
+            continue
 
-        # Detectar bancos
+        msg_hash = hashlib.md5(msg.encode('utf-8')).hexdigest()
+        if msg_hash in _scrapear_subastas.sent_hashes:
+            continue
+        if len(_scrapear_subastas.sent_hashes) > 200:
+            _scrapear_subastas.sent_hashes.clear()
+
         bancos_detectados = []
         for keyword, nombre in BANCOS.items():
             if keyword.upper() in msg.upper() and nombre not in bancos_detectados:
                 bancos_detectados.append(nombre)
 
-        # Detectar estado
-        status = None
-        tasa = None
-        minimo = None
-        maximo = None
-        accion = ""
-
         msg_upper = msg.upper()
+        tiene_banco = len(bancos_detectados) > 0
+        es_bcv = "BCV" in msg_upper
 
-        # Estados de intervención
-        if "INTERVENCIÓN ACTIVA" in msg_upper or "INTERVENCION ACTIVA" in msg_upper:
-            status = "activa"
-            accion = "INTERVENCIÓN ACTIVA"
-        elif "INTERVENCIÓN CERRADA" in msg_upper or "INTERVENCION CERRADA" in msg_upper:
-            status = "cerrada"
-            accion = "INTERVENCIÓN CERRADA"
-        elif "INTERVENCIÓN DIGITAL ACTIVA" in msg_upper or "INTERVENCION DIGITAL ACTIVA" in msg_upper:
-            status = "activa"
-            accion = "INTERVENCIÓN DIGITAL ACTIVA"
-        elif "INTERVENCION ELECTRÓNICA ACTIVA" in msg_upper or "INTERVENCION ELECTRONICA ACTIVA" in msg_upper or "INTERVENCIÓN ELECTRÓNICO ACTIVA" in msg_upper or "INTERVENCION ELECTRONICO ACTIVA" in msg_upper:
-            status = "activa"
-            accion = "INTERVENCIÓN ELECTRÓNICA ACTIVA"
-        elif "CONTINUA" in msg_upper or "ABIERTA" in msg_upper:
-            status = "activa"
-            accion = "INTERVENCIÓN ACTIVA"
-        elif "CERRADA" in msg_upper:
-            status = "cerrada"
-            accion = "INTERVENCIÓN CERRADA"
-        # Procesamiento de órdenes
-        elif "RECHAZANDO" in msg_upper:
-            status = "procesando"
-            accion = "RECHAZANDO ÓRDENES"
-        elif "APROBANDO" in msg_upper:
-            status = "procesando"
-            accion = "APROBANDO ÓRDENES"
-        elif "ACREDITANDO" in msg_upper or "ACREDITARON" in msg_upper:
-            status = "procesando"
-            accion = "ACREDITANDO ÓRDENES"
-        elif "PACTANDO" in msg_upper:
-            status = "procesando"
-            accion = "PACTANDO MONTO"
-        # Noticias bancarias / BCV
-        elif "BCV" in msg_upper and ("INTERVENCION" in msg_upper or "TASA" in msg_upper or "PUBLICA" in msg_upper or "NOTICIA" in msg_upper or "NUEVA" in msg_upper):
-            status = "noticia"
-            accion = "NOTICIA BCV"
-        elif bancos_detectados and ("NUEVO" in msg_upper or "OPCIONES" in msg_upper or "AÑADE" in msg_upper or "HABILITA" in msg_upper or "INFORMAN" in msg_upper):
-            status = "noticia"
-            accion = "NOTICIA BANCARIA"
-
-        # Extraer tasa
-        tasa_match = re.search(r'(?:TASA|tasa)[:\s]*Bs\.?\s*([\d.,]+)', msg)
-        if tasa_match:
-            tasa = tasa_match.group(1).replace('.', '').replace(',', '.')
-
-        # Extraer minimo/maximo
-        min_match = re.search(r'(?:MÍNIMO|minimo)[:\s]*\$?\s*([\d.,]+)', msg)
-        max_match = re.search(r'(?:MÁXIMO|maximo)[:\s]*\$?\s*([\d.,]+)', msg)
-        if min_match:
-            minimo = min_match.group(1).replace('.', '').replace(',', '.')
-        if max_match:
-            maximo = max_match.group(1).replace('.', '').replace(',', '.')
-
-        if not bancos_detectados or not status:
+        es_relevante = (
+            tiene_banco or es_bcv
+            or any(k in msg_upper for k in [
+                "TASA", "INTERVENCION", "ACREDITANDO", "APROBANDO",
+                "RECHAZANDO", "PACTANDO", "MENUDEO", "MESA DE CAMBIO",
+                "ABIERTA", "CERRADA", "CONTINUA", "ACTIVO", "ACTIVA",
+                "BANCA", "BANCARIO", "BANCARIA", "REACTIVA",
+            ])
+        )
+        if not es_relevante:
             continue
 
-        for banco in bancos_detectados:
-            prev = _SUBASTAS_ESTADO.get(banco, {})
-            # Para procesando y noticia, siempre enviar
-            if prev.get("status") == status and status not in ("procesando", "noticia"):
-                continue
-            print(f"[Subastas] {banco} -> {status}", flush=True)
+        def _parse_num(s):
+            s = s.strip()
+            if ',' in s and '.' in s:
+                return s.replace('.', '').replace(',', '.')
+            elif ',' in s:
+                return s.replace(',', '.')
+            return s
 
-            _SUBASTAS_ESTADO[banco] = {"status": status, "ts": ahora}
+        tasa_limpia = None
+        tasa_m = re.search(r'TASA[:\s]*BS\.?\s*([\d.,]+)', msg_upper)
+        if tasa_m:
+            tasa_limpia = _parse_num(tasa_m.group(1))
 
-            if status == "activa":
-                tasa_str = f"Tasa: Bs. {tasa}" if tasa else ""
-                rango_str = ""
-                if minimo and maximo:
-                    rango_str = f"Mín: ${minimo} | Máx: ${maximo}"
-                _send_channel(
-                    f"🏦 *{banco}* — {accion}\n"
-                    f"{tasa_str}\n"
-                    f"{rango_str}\n"
-                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
-                    parse_mode="Markdown"
-                )
-            elif status == "cerrada":
-                _send_channel(
-                    f"🏦 *{banco}* — {accion}\n"
-                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
-                    parse_mode="Markdown"
-                )
-            elif status == "procesando":
-                _send_channel(
-                    f"🏦 *{banco}* — {accion}\n"
-                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
-                    parse_mode="Markdown"
-                )
-            elif status == "noticia":
-                _send_channel(
-                    f"📰 *{banco}* — {accion}\n"
-                    f"{msg[:200]}\n"
-                    f"⏰ {datetime.now(VENEZUELA_TZ).strftime('%H:%M')}",
-                    parse_mode="Markdown"
-                )
+        minimo = None
+        min_m = re.search(r'(?:MÍNIMO|MINIMO)[:\s]*\$?\s*(\d[\d.,]*)', msg_upper)
+        if min_m:
+            minimo = _parse_num(min_m.group(1))
+
+        maximo = None
+        max_m = re.search(r'(?:MÁXIMO|MAXIMO)[:\s]*\$?\s*(\d[\d.,]*)', msg_upper)
+        if max_m:
+            maximo = _parse_num(max_m.group(1))
+
+        usd_rate = None
+        usd_m = re.search(r'D[OÓ]LAR.*?BS\.\s*([\d.,]+)', msg_upper)
+        if usd_m:
+            usd_rate = _parse_num(usd_m.group(1))
+
+        hora_str = datetime.now(VENEZUELA_TZ).strftime('%H:%M')
+
+        import random as _rnd
+
+        if tiene_banco:
+            banco_str = " | ".join(bancos_detectados)
+            action = None
+            if "ACREDITANDO" in msg_upper or "ACREDITARON" in msg_upper:
+                action = _rnd.choice([
+                    "Acreditando pagos del día",
+                    "Procesando acreditaciones",
+                    "Realizando acreditaciones bancarias",
+                    "Acreditando depósitos",
+                ])
+            elif "APROBANDO" in msg_upper:
+                action = _rnd.choice([
+                    "Aprobando solicitudes",
+                    "Procesando órdenes aprobadas",
+                    "Órdenes en proceso de aprobación",
+                    "Validando operaciones cambiarias",
+                ])
+            elif "RECHAZANDO" in msg_upper:
+                action = _rnd.choice([
+                    "Rechazando solicitudes",
+                    "Devolviendo órdenes sin procesar",
+                    "Órdenes siendo rechazadas",
+                ])
+            elif "PACTANDO" in msg_upper:
+                action = _rnd.choice([
+                    "Definiendo montos de intervención",
+                    "Pactando montos del día",
+                    "Estableciendo montos operativos",
+                ])
+            elif "MESA DE CAMBIO" in msg_upper:
+                action = _rnd.choice([
+                    "Mesa de cambio operativa",
+                    "Cambio electrónico disponible",
+                    "Plataforma de cambio activa",
+                    "Sistema de cambio habilitado",
+                ])
+            elif any(w in msg_upper for w in ["ACTIVO", "ACTIVA", "ABIERTA", "CONTINUA", "MENUDEO"]):
+                action = _rnd.choice([
+                    "Intervención activa",
+                    "Operativo disponible",
+                    "Servicio habilitado",
+                    "Sistema operativo",
+                ])
+            elif "CERRADA" in msg_upper:
+                action = _rnd.choice([
+                    "Intervención finalizada",
+                    "Operativo cerrado",
+                    "Servicio suspendido",
+                    "Sistema fuera de línea",
+                ])
+
+            inicio = _rnd.choice([
+                f"🏦 *{banco_str}*",
+                f"🏦 *{banco_str}* — {action}" if action else f"🏦 *{banco_str}*"
+            ])
+            lines = [inicio]
+            if tasa_limpia:
+                lines.append(f"💱 Cotización: Bs. {tasa_limpia}")
+            if minimo and maximo:
+                lines.append(f"📊 Desde ${minimo} hasta ${maximo}")
+            elif minimo:
+                lines.append(f"📊 Mínimo: ${minimo}")
+            elif maximo:
+                lines.append(f"📊 Máximo: ${maximo}")
+            lines.append(f"⏰ {hora_str}")
+
+        elif es_bcv:
+            fecha_match = re.search(r'TASA PARA EL D[IÍ]A\s+(.+?)(?:\s*[💵📈]|\n|$)', msg_upper)
+            fecha_bcv = fecha_match.group(1).strip().rstrip('.')[:60] if fecha_match else ""
+            eur_m = re.search(r'EURO.*?BS\.\s*([\d.,]+)', msg_upper)
+            eur_rate = _parse_num(eur_m.group(1)) if eur_m else None
+            ti_m = re.search(r'TASA DE INTERVENCI[OÓ]N[:\s]*([\d.,]+)', msg_upper)
+            ti = _parse_num(ti_m.group(1)) if ti_m else None
+
+            intro = _rnd.choice([
+                "📰 *Actualización BCV*",
+                "📰 *BCV — Tasas del día*",
+                "📰 *Banco Central — Tasas oficiales*",
+            ])
+            date_line = f"📅 {fecha_bcv}" if fecha_bcv else ""
+            lines = [intro]
+            if date_line:
+                lines.append(date_line)
+            if usd_rate:
+                lines.append(f"💵 Dólar: Bs. {usd_rate}")
+            if eur_rate:
+                lines.append(f"💶 Euro: Bs. {eur_rate}")
+            if ti:
+                lines.append(f"ℹ️ Tasa de intervención: Bs. {ti}")
+            elif tasa_limpia:
+                lines.append(f"ℹ️ Referencia: Bs. {tasa_limpia}")
+            lines.append(f"⏰ {hora_str}")
+
+        else:
+            intro = _rnd.choice([
+                "📰 *Aviso del sector bancario*",
+                "📰 *Noticia financiera*",
+                "📰 *Reporte bancario*",
+            ])
+            lines = [intro]
+            text = re.sub(r'^[^\w]*', '', msg)[:250]
+            lines.append(text)
+            lines.append(f"⏰ {hora_str}")
+
+        _send_channel("\n".join(lines), parse_mode="Markdown")
+        _scrapear_subastas.sent_hashes.add(msg_hash)
+        print(f"[Subastas] Enviado: {' | '.join(bancos_detectados) if tiene_banco else 'BCV'}", flush=True)
 
 
 # Filtros de monto disponibles: 0 = Mayorista (sin filtro), 4000 = ~$5, 8000 = ~$10, 16000 = ~$20
@@ -662,6 +727,7 @@ def guardar_config_local():
             "monto_filtro": CONFIG.get("monto_filtro", 0),
             "default_crypto": CONFIG.get("default_crypto", "USDT"),
             "grupo_chat_id": CONFIG.get("grupo_chat_id", ""),
+            "ultimo_conteo_miembros": CONFIG.get("ultimo_conteo_miembros", 0),
         }
         supabase_save_config(config_dict)
     except Exception as e:
