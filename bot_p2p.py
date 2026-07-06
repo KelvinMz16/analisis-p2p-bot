@@ -282,6 +282,15 @@ def _loop_detectar_miembros():
             pass
         time.sleep(5)
 
+def _loop_scrapear_subastas():
+    time.sleep(3)
+    while True:
+        try:
+            _scrapear_subastas()
+        except Exception:
+            pass
+        time.sleep(2)
+
 def _obtener_tasa_bcv():
     """Obtiene la tasa BCV oficial. Primero intenta bcv.org.ve directo, si falla usa finanzasdigital."""
     import re
@@ -420,9 +429,9 @@ def _obtener_intervalo_subastas():
     """Devuelve el intervalo de scraping segun la hora del dia."""
     hora = datetime.now(VENEZUELA_TZ).hour
     if 7 <= hora < 12:
-        return 5    # manana: cada 5 segundos
+        return 2    # 7am-11:59am: cada 2 segundos
     elif 12 <= hora < 23:
-        return 120  # tarde/noche: cada 2 minutos
+        return 120  # 12pm-10:59pm: cada 2 minutos
     else:
         return 0    # 11pm-7am: no scrapear
 
@@ -3086,9 +3095,6 @@ def loop_monitoreo():
             # Detectar cambio de tasa BCV (cada ciclo)
             _verificar_cambio_tasa_bcv()
 
-            # Subastas BCV se ejecuta cada ciclo (tiene su propio intervalo interno)
-            _scrapear_subastas()
-
                 # ============================================================
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
             # ============================================================
@@ -3138,6 +3144,7 @@ if __name__ == "__main__":
         threading.Thread(target=polling_telegram, daemon=True).start()
         if TELEGRAM_CHANNEL_ID:
             threading.Thread(target=_loop_detectar_miembros, daemon=True).start()
+        threading.Thread(target=_loop_scrapear_subastas, daemon=True).start()
         time.sleep(2)
         extra = ""
         if not en_horario():
