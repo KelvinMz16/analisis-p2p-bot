@@ -231,6 +231,14 @@ _cargar_chat_configs()
 _STARTUP_SILENT_UNTIL = time.time() + 120  # 2 min de silencio tras reinicio
 SEP = "\n━━━━━━━━━━━━━━━━━━━━━\n"
 
+# Cargar hashes de noticias ya enviadas
+try:
+    if os.path.exists(_NOTICIAS_HASH_PATH):
+        with open(_NOTICIAS_HASH_PATH, "r") as f:
+            _NOTICIAS_ENVIADAS = set(json.load(f))
+except Exception:
+    _NOTICIAS_ENVIADAS = set()
+
 def _broadcast(texto, parse_mode="Markdown"):
     _send_channel(texto, parse_mode)
 
@@ -407,6 +415,9 @@ _ULTIMA_HORA_ENVIADA = -1
 _SUBASTAS_ULTIMO_SCRAPED = 0
 _ULTIMO_SPREAD_BCV = 0  # timestamp del ultimo spread enviado
 _ULTIMO_TOP_OPORT = 0  # timestamp del ultimo top oportunidades enviado
+_ULTIMA_BUSQUEDA_NOTICIAS = 0
+_NOTICIAS_HASH_PATH = "noticias_enviadas.json"
+_NOTICIAS_ENVIADAS = set()
 
 
 def _top_oportunidades():
@@ -440,6 +451,80 @@ def _top_oportunidades():
         lines.append(bcv_str)
     _ULTIMO_TOP_OPORT = time.time()
     _send_channel("\n".join(lines))
+
+def _buscar_noticias_p2p():
+    global _ULTIMA_BUSQUEDA_NOTICIAS
+    ahora = time.time()
+    if ahora - _ULTIMA_BUSQUEDA_NOTICIAS < 43200:
+        return
+    _ULTIMA_BUSQUEDA_NOTICIAS = ahora
+    queries = ["Binance P2P Venezuela", "arbitraje P2P Venezuela", "USDT Venezuela", "criptomonedas Venezuela"]
+    from urllib.parse import quote
+    import hashlib, xml.etree.ElementTree as ET
+    noticias = []
+    for q in queries:
+        try:
+            url = f"https://news.google.com/rss/search?q={quote(q)}&hl=es-US&gl=US&ceid=US:es"
+            resp = requests.get(url, timeout=15)
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.content)
+            for item in root.findall('.//item'):
+                title = item.findtext('title', '')
+                link = item.findtext('link', '')
+                pub = item.findtext('pubDate', '')
+                if not title or not link:
+                    continue
+                h = hashlib.md5(link.encode()).hexdigest()
+                if h in _NOTICIAS_ENVIADAS:
+                    continue
+                _NOTICIAS_ENVIADAS.add(h)
+                noticias.append((title, link, pub))
+        except Exception as e:
+            print(f"[Noticias] Error en query '{q}': {e}", flush=True)
+    if not noticias:
+        return
+    noticias = noticias[:3]
+    master_id = int(TELEGRAM_CHAT_ID)
+    for title, link, pub in noticias:
+        try:
+            img_url = None
+            try:
+                resp2 = requests.get(link, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                if resp2.status_code == 200:
+                    import re
+                    m = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', resp2.text)
+                    if m:
+                        img_url = m.group(1)
+                    else:
+                        m = re.search(r'<meta\s+content="([^"]+)"\s+property="og:image"', resp2.text)
+                        if m:
+                            img_url = m.group(1)
+            except Exception:
+                pass
+            caption = f"📰 *{title}*\n\nℹ️ {pub}\n\n¿Publicar en el canal?"
+            kb = json.dumps({"inline_keyboard": [
+                [{"text": "✅ Publicar", "callback_data": f"noti_ok:{h}"},
+                 {"text": "❌ Descartar", "callback_data": f"noti_no:{h}"}]
+            ]})
+            if img_url:
+                _tg_call("sendPhoto", {
+                    "chat_id": master_id, "photo": img_url,
+                    "caption": caption, "parse_mode": "Markdown",
+                    "reply_markup": kb
+                })
+            else:
+                _tg_call("sendMessage", {
+                    "chat_id": master_id, "text": caption,
+                    "parse_mode": "Markdown", "reply_markup": kb
+                })
+        except Exception as e:
+            print(f"[Noticias] Error enviando noticia: {e}", flush=True)
+    try:
+        with open(_NOTICIAS_HASH_PATH, "w") as f:
+            json.dump(list(_NOTICIAS_ENVIADAS), f)
+    except Exception:
+        pass
 
 _ULTIMA_TASA_BCV = 0  # ultima tasa BCV conocida
 
@@ -2025,6 +2110,16 @@ def procesar_mensaje(texto, chat_id):
                 "parse_mode": "Markdown"})
             return
         # si es master, deja que pase al /help handler privado
+    if texto.startswith("/decirimg"):
+        if not _es_master(chat_id):
+            return
+        caption = texto[len("/decirimg"):].strip()
+        if not caption:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "Uso: /decirimg <texto>\nLuego env\u00eda la foto."})
+            return
+        ESTADOS_USUARIO[chat_id] = {"esperando": "img_canal", "texto": caption}
+        _tg_call("sendMessage", {"chat_id": chat_id, "text": "Ahora env\u00eda la foto que quieres publicar en el canal."})
+        return
     if texto.startswith("/groupid"):
         if not _es_master(chat_id):
             return
@@ -2167,27 +2262,28 @@ def procesar_mensaje(texto, chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": "Bot de señales P2P. Usa los botones del menú.", "parse_mode": "Markdown"})
             return
         _tg_call("sendMessage", {"chat_id": chat_id, "text":
-            "*Comandos del bot:*\n\n"
-            "📋 `/menu` — Menú principal\n"
-            "🏷️ `/precio` — Precios P2P\n"
-            "📊 `/multi` — Multi-cripto\n"
-            "💰 `/capital` — Capital\n"
-            "🎯 `/umbral` — Umbral de alerta\n"
-            "📈 `/historial` — Historial\n"
-            "🔍 `/filtro` — Filtro\n"
-            "🔄 `/dex` — DEX\n"
-            "⏰ `/horarios` — Horarios\n"
-            "⚡ `/combo` — Combo\n"
-            "📉 `/mercado` — Mercado\n"
-            "🎯 `/precision` — Precisión\n"
-            "🧮 `/calc` — Calculadora\n\n"
-            "*Comandos de grupo (solo master):*\n"
-            "📢 `/decir <msg>` — Enviar al grupo\n"
-            "🚫 `/ban <id> [horas]` — Banear usuario\n"
-            "✅ `/unban <id>` — Desbanear\n"
-            "🆔 `/groupid` — ID del chat actual\n"
-            "⚙️ `/setgrupo <id>` — Configurar grupo\n\n"
-            "💡 *Tip:* También puedes usar los botones del menú.",
+                "*Comandos del bot:*\n\n"
+                "📋 `/menu` — Menú principal\n"
+                "🏷️ `/precio` — Precios P2P\n"
+                "📊 `/multi` — Multi-cripto\n"
+                "💰 `/capital` — Capital\n"
+                "🎯 `/umbral` — Umbral de alerta\n"
+                "📈 `/historial` — Historial\n"
+                "🔍 `/filtro` — Filtro\n"
+                "🔄 `/dex` — DEX\n"
+                "⏰ `/horarios` — Horarios\n"
+                "⚡ `/combo` — Combo\n"
+                "📉 `/mercado` — Mercado\n"
+                "🎯 `/precision` — Precisión\n"
+                "🧮 `/calc` — Calculadora\n\n"
+                "*Comandos de grupo (solo master):*\n"
+                "📢 `/decir <msg>` — Enviar texto al grupo\n"
+                "🖼️ `/decirimg <texto>` — Enviar imagen+texto al canal\n"
+                "🚫 `/ban <id> [horas]` — Banear usuario\n"
+                "✅ `/unban <id>` — Desbanear\n"
+                "🆔 `/groupid` — ID del chat actual\n"
+                "⚙️ `/setgrupo <id>` — Configurar grupo\n\n"
+                "💡 *Tip:* También puedes usar los botones del menú.",
             "parse_mode": "Markdown"})
         return
     if texto.startswith("/ban"):
@@ -2654,7 +2750,8 @@ def procesar_callback(cq):
             "🎯 `/precision` — Precisión\n"
             "🧮 `/calc` — Calculadora\n\n"
             "*Comandos de grupo (solo master):*\n"
-            "📢 `/decir <msg>` — Enviar al grupo\n"
+            "📢 `/decir <msg>` — Enviar texto al grupo\n"
+            "🖼️ `/decirimg <texto>` — Enviar imagen+texto al canal\n"
             "🚫 `/ban <id> [horas]` — Banear usuario\n"
             "✅ `/unban <id>` — Desbanear\n"
             "🆔 `/groupid` — ID del chat actual\n"
@@ -2866,6 +2963,40 @@ def procesar_callback(cq):
             "reply_markup": kb
         }, ignore_400=True)
 
+    elif data.startswith("noti_ok:") or data.startswith("noti_no:"):
+        accion, h = data.split(":", 1)
+        try:
+            _tg_call("editMessageReplyMarkup", {
+                "chat_id": chat_id, "message_id": msg_id,
+                "reply_markup": json.dumps({"inline_keyboard": []})
+            })
+        except Exception:
+            pass
+        if accion == "noti_ok":
+            msg = cq["message"]
+            photo = msg.get("photo")
+            caption = msg.get("caption", "")
+            if photo and TELEGRAM_CHANNEL_ID:
+                file_id = photo[-1]["file_id"]
+                _tg_call("sendPhoto", {
+                    "chat_id": int(TELEGRAM_CHANNEL_ID),
+                    "photo": file_id,
+                    "caption": caption.replace("\n\nℹ️ ", "\n\n").replace("\n\n¿Publicar en el canal?", ""),
+                    "parse_mode": "Markdown"
+                })
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": "✅ Publicado en el canal."})
+            elif TELEGRAM_CHANNEL_ID:
+                text = msg.get("text", caption).replace("\n\nℹ️ ", "\n\n").replace("\n\n¿Publicar en el canal?", "")
+                _tg_call("sendMessage", {
+                    "chat_id": int(TELEGRAM_CHANNEL_ID),
+                    "text": text,
+                    "parse_mode": "Markdown"
+                })
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": "✅ Publicado en el canal."})
+            else:
+                _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay canal configurado."})
+        else:
+            _tg_call("sendMessage", {"chat_id": chat_id, "text": "❌ Noticia descartada."})
     elif data == "menu":
         limpiar_refresh(chat_id)
         editar_mensaje(chat_id, msg_id,
@@ -2917,6 +3048,26 @@ def polling_telegram():
                             )
                             time.sleep(1)
                             _send_channel(_precio_p2p_resumen())
+                    elif "photo" in msg:
+                        chat_id = msg["chat"]["id"]
+                        estado = ESTADOS_USUARIO.get(chat_id, {})
+                        if estado.get("esperando") == "img_canal":
+                            photo = msg["photo"][-1]
+                            file_id = photo["file_id"]
+                            texto = estado.get("texto", "")
+                            if TELEGRAM_CHANNEL_ID:
+                                _tg_call("sendPhoto", {
+                                    "chat_id": int(TELEGRAM_CHANNEL_ID),
+                                    "photo": file_id,
+                                    "caption": texto,
+                                    "parse_mode": "Markdown"
+                                })
+                                _tg_call("sendMessage", {"chat_id": chat_id, "text": "✅ Publicado en el canal."})
+                            else:
+                                _tg_call("sendMessage", {"chat_id": chat_id, "text": "No hay canal configurado."})
+                            ESTADOS_USUARIO.pop(chat_id, None)
+                        else:
+                            _tg_call("sendMessage", {"chat_id": chat_id, "text": "No esperaba una foto. Usa /decirimg <texto> primero."})
                     elif "text" in msg:
                         procesar_mensaje(msg["text"], msg["chat"]["id"])
         except Exception as e:
@@ -3108,6 +3259,8 @@ def loop_monitoreo():
                     if not _SENALES_PENDIENTES[k].get("enviada"):
                         del _SENALES_PENDIENTES[k]
 
+            # Noticias P2P (cada 12h)
+            _buscar_noticias_p2p()
             # Verificar resultados de senales previas (cada 30 ciclos)
             if ciclo % 30 == 0:
                 _verificar_resultados_senales()
