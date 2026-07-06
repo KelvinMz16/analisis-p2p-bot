@@ -228,11 +228,15 @@ def _cargar_chat_configs():
 
 _cargar_chat_configs()
 
+_STARTUP_SILENT_UNTIL = time.time() + 120  # 2 min de silencio tras reinicio
+
 def _broadcast(texto, parse_mode="Markdown"):
     _send_channel(texto, parse_mode)
 
 def _send_channel(texto, parse_mode="Markdown"):
     if not TELEGRAM_CHANNEL_ID:
+        return
+    if time.time() < _STARTUP_SILENT_UNTIL:
         return
     try:
         _tg_call("sendMessage", {"chat_id": int(TELEGRAM_CHANNEL_ID), "text": texto, "parse_mode": parse_mode})
@@ -534,6 +538,7 @@ def _scrapear_subastas():
                 "TASA", "INTERVENCION", "ACREDITANDO", "APROBANDO",
                 "RECHAZANDO", "PACTANDO", "MENUDEO", "MESA DE CAMBIO",
                 "ABIERTA", "CERRADA", "CONTINUA", "ACTIVO", "ACTIVA",
+                "FINALIZADA", "TERMINADA", "SUSPENDIDA", "CONCLUIDA",
                 "BANCA", "BANCARIO", "BANCARIA", "REACTIVA",
             ])
         )
@@ -574,26 +579,18 @@ def _scrapear_subastas():
         if tiene_banco:
             banco_str = " | ".join(bancos_detectados)
 
-            if "INTERVENCIÓN DIGITAL ACTIVA" in msg_upper or "INTERVENCION DIGITAL ACTIVA" in msg_upper or "MESA DE CAMBIO" in msg_upper or "MENUDEO" in msg_upper:
-                if any(w in msg_upper for w in ["CERRADA"]):
-                    estado = "CERRADA"
-                else:
-                    estado = "ABIERTA"
-                if "DIGITAL" in msg_upper:
-                    action = f"INTERVENCIÓN DIGITAL {estado}"
-                elif "MESA DE CAMBIO" in msg_upper:
-                    action = f"MESA DE CAMBIO {estado}"
-                elif "MENUDEO" in msg_upper:
-                    action = f"MENUDEO {estado}"
-                else:
-                    action = f"INTERVENCIÓN CAMBIARIA {estado}"
-            elif "ACTIVO" in msg_upper or "ACTIVA" in msg_upper or "ABIERTA" in msg_upper or "CONTINUA" in msg_upper:
-                if "CERRADA" in msg_upper:
-                    action = "INTERVENCIÓN CAMBIARIA CERRADA"
-                else:
-                    action = "INTERVENCIÓN CAMBIARIA ABIERTA"
-            elif "CERRADA" in msg_upper:
+            cerrada_kw = any(w in msg_upper for w in ["CERRADA", "FINALIZADA", "TERMINADA", "SUSPENDIDA", "CONCLUIDA"])
+            abierta_kw = any(w in msg_upper for w in ["ACTIVO", "ACTIVA", "ABIERTA", "CONTINUA"])
+            if "DIGITAL" in msg_upper:
+                action = "INTERVENCIÓN DIGITAL CERRADA" if cerrada_kw else "INTERVENCIÓN DIGITAL ABIERTA"
+            elif "MESA DE CAMBIO" in msg_upper:
+                action = "MESA DE CAMBIO CERRADA" if cerrada_kw else "MESA DE CAMBIO ABIERTA"
+            elif "MENUDEO" in msg_upper:
+                action = "MENUDEO CERRADO" if cerrada_kw else "MENUDEO ACTIVO"
+            elif cerrada_kw:
                 action = "INTERVENCIÓN CAMBIARIA CERRADA"
+            elif abierta_kw:
+                action = "INTERVENCIÓN CAMBIARIA ABIERTA"
             elif "ACREDITANDO" in msg_upper or "ACREDITARON" in msg_upper:
                 action = "ACREDITANDO ÓRDENES"
             elif "APROBANDO" in msg_upper:
@@ -3096,6 +3093,8 @@ def loop_monitoreo():
             _verificar_cambio_tasa_bcv()
 
                 # ============================================================
+            # Subastas BCV (ciclo principal + hilo separado como respaldo)
+            _scrapear_subastas()
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
             # ============================================================
             for nk in DEX_NETWORKS:
