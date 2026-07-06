@@ -1018,8 +1018,9 @@ def _construir_teclado(chat_id=None):
             [{"text": "\U0001F4B0 Precio", "callback_data": "precio"}],
             [{"text": f"\u2699\ufe0f Capital (${_get_config(chat_id)['capital']:.0f})", "callback_data": "capital"},
              {"text": f"\U0001F3AF Umbral ({_get_config(chat_id)['margen_objetivo']}%)", "callback_data": "umbral"}],
-            [{"text": "\U0001F4C5 Historial", "callback_data": "historial"},
-             {"text": "\U0001F9EE Calc", "callback_data": "calculadora"},
+            [{"text": f"\U0001F6D2 Filtro: {nombre_filtro(_get_config(chat_id).get('monto_filtro', 0))}", "callback_data": "ciclo_filtro"},
+             {"text": "\U0001F4C5 Historial", "callback_data": "historial"}],
+            [{"text": "\U0001F9EE Calc", "callback_data": "calculadora"},
              {"text": "\U0001F504 Actualizar", "callback_data": "menu"}],
         ]
     return [
@@ -2708,7 +2709,7 @@ def procesar_callback(cq):
     if not _autorizado(chat_id):
         return
     limpiar_refresh(chat_id)
-    restringido = not _es_master(chat_id) and data in ("combo", "arbitraje", "ciclo_filtro", "dex_multired", "status", "precision", "mejor_horario", "timing_mercado")
+    restringido = not _es_master(chat_id) and data in ("combo", "arbitraje", "dex_multired", "status", "precision", "mejor_horario", "timing_mercado")
     if data.startswith("detalle_") and not _es_master(chat_id):
         restringido = True
     if restringido:
@@ -2869,17 +2870,24 @@ def procesar_callback(cq):
             editar_mensaje(chat_id, msg_id, "Error al procesar el análisis de horarios.")
 
     elif data == "ciclo_filtro":
-        idx_actual = FILTROS_MONTO.index(CONFIG["monto_filtro"]) if CONFIG["monto_filtro"] in FILTROS_MONTO else 0
+        cfg = _get_config(chat_id)
+        idx_actual = FILTROS_MONTO.index(cfg["monto_filtro"]) if cfg["monto_filtro"] in FILTROS_MONTO else 0
         idx_nuevo = (idx_actual + 1) % len(FILTROS_MONTO)
-        viejo = nombre_filtro()
-        CONFIG["monto_filtro"] = FILTROS_MONTO[idx_nuevo]
-        guardar_config_local()
+        nuevo_valor = FILTROS_MONTO[idx_nuevo]
+        if _es_master(chat_id):
+            viejo = nombre_filtro(CONFIG["monto_filtro"])
+            CONFIG["monto_filtro"] = nuevo_valor
+            guardar_config_local()
+        else:
+            viejo = nombre_filtro(cfg["monto_filtro"])
+            _save_chat_config(chat_id, {"monto_filtro": nuevo_valor})
         ALERTA_ENVIADA.clear()
+        nuevo_nombre = nombre_filtro(_get_config(chat_id)["monto_filtro"])
         editar_mensaje(chat_id, msg_id,
             f"\U0001F6D2 *Filtro actualizado*\n"
-            f"{viejo} \u27A1 {nombre_filtro()}\n\n"
-            f"Ahora calcula precios para ordenes de *{nombre_filtro()}*.\n"
-            f"Comisiones totales: {COMISION_TOTAL*100:.2f}%"
+            f"{viejo} \u27A1 {nuevo_nombre}\n\n"
+            f"Ordenes de *{nuevo_nombre}*.\n"
+            f"Comisiones: {COMISION_TOTAL*100:.2f}%"
         )
 
     elif data == "status":
