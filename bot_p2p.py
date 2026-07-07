@@ -1845,7 +1845,7 @@ def _evaluar_senal_multicapa():
         razones_simple = razones[:2]
         spark_compra = _sparkline(precios_compra, 16)
         return ("compra", min(conf, 100), detalles,
-            f"📉 *SEÑAL DE COMPRA* (Confianza: {min(conf,100)}%)\n"
+            f"📉 *SEÑAL DE COMPRA USDT* (Confianza: {min(conf,100)}%)\n"
             f"💵 *Precio:* {r['compra']:.2f} VES\n"
             f"📊 *Vs promedio 24h:* {desv_compra:+.2f}%\n"
             f"{'📈 *Tendencia:* estable' if pendiente is None or pendiente >= -0.5 else '📉 *Tendencia:* bajando'}\n"
@@ -1874,7 +1874,7 @@ def _evaluar_senal_multicapa():
         razones_simple = razones[:2]
         spark_venta = _sparkline(precios_venta, 16)
         return ("venta", min(conf, 100), detalles,
-            f"📈 *SEÑAL DE VENTA* (Confianza: {min(conf,100)}%)\n"
+            f"📈 *SEÑAL DE VENTA USDT* (Confianza: {min(conf,100)}%)\n"
             f"💵 *Precio:* {r['venta']:.2f} VES\n"
             f"📊 *Vs promedio 24h:* {desv_venta:+.2f}%\n"
             f"{'📉 *Tendencia:* estable' if pendiente is None or pendiente <= 0.5 else '📈 *Tendencia:* subiendo'}\n"
