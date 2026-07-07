@@ -519,6 +519,7 @@ def _scrapear_subastas():
         "BBVA PROVINCIAL": "PROVINCIAL",
         "PROVINCIAL": "PROVINCIAL",
         "BANCO DEL TESORO": "BANCO DEL TESORO",
+        "TESORO": "BANCO DEL TESORO",
         "BDT": "BDT",
         "BDV": "BDV",
         "BANCO DE VENEZUELA": "BDV",
@@ -566,6 +567,7 @@ def _scrapear_subastas():
 
         def _parse_num(s):
             s = s.strip()
+            s = s.replace('\u200b', '').replace(' ', '').replace('\u00a0', '')
             if ',' in s and '.' in s:
                 return s.replace('.', '').replace(',', '.')
             elif ',' in s:
@@ -573,7 +575,7 @@ def _scrapear_subastas():
             return s
 
         tasa_limpia = None
-        tasa_m = re.search(r'TASA[:\s]*BS\.?\s*([\d.,]+)', msg_upper)
+        tasa_m = re.search(r'TASA[:\s]*BS\.?\s*([\d\s.,]+)', msg_upper)
         if tasa_m:
             tasa_limpia = _parse_num(tasa_m.group(1))
 
@@ -583,7 +585,7 @@ def _scrapear_subastas():
             minimo = _parse_num(min_m.group(1))
 
         maximo = None
-        max_m = re.search(r'(?:MÁXIMO|MAXIMO)[:\s]*\$?\s*(\d[\d.,]*)', msg_upper)
+        max_m = re.search(r'(?:MÁXIMO|MAXIMO|MAX)[:\s]*\$?\s*(\d[\d.,]*)', msg_upper)
         if max_m:
             maximo = _parse_num(max_m.group(1))
 
@@ -610,13 +612,13 @@ def _scrapear_subastas():
                 action = "INTERVENCIÓN CAMBIARIA CERRADA"
             elif abierta_kw:
                 action = "INTERVENCIÓN CAMBIARIA ABIERTA"
-            elif "ACREDITANDO" in msg_upper or "ACREDITARON" in msg_upper:
+            elif any(w in msg_upper for w in ["ACREDITANDO", "ACREDITARON", "ACREDITO", "ACREDITÓ"]):
                 action = "ACREDITANDO ÓRDENES"
-            elif "APROBANDO" in msg_upper:
+            elif any(w in msg_upper for w in ["APROBANDO", "APROBÓ"]):
                 action = "APROBANDO ÓRDENES"
-            elif "RECHAZANDO" in msg_upper:
+            elif any(w in msg_upper for w in ["RECHAZANDO", "RECHANZADO", "RECHAZÓ"]):
                 action = "RECHAZANDO ÓRDENES"
-            elif "PACTANDO" in msg_upper:
+            elif any(w in msg_upper for w in ["PACTANDO", "PACTÓ"]):
                 action = "PACTANDO MONTO"
             else:
                 action = ""
@@ -631,6 +633,9 @@ def _scrapear_subastas():
                 lines.append(f"📊 Mínimo: ${minimo}")
             elif maximo:
                 lines.append(f"📊 Máximo: ${maximo}")
+            if not action and not tasa_limpia and not minimo and not maximo:
+                _scrapear_subastas.sent_hashes.add(msg_hash)
+                continue
             lines.append(f"⏰ {hora_str}")
 
         elif es_bcv:
@@ -827,7 +832,10 @@ _COINGECKO_ASSET_IDS = {
     "BNB": "binancecoin",
     "SOL": "solana",
 }
-HISTORIAL_PATH = "historial_precios.jsonl"
+if os.path.isdir("/data"):
+    HISTORIAL_PATH = "/data/historial_precios.jsonl"
+else:
+    HISTORIAL_PATH = "historial_precios.jsonl"
 
 VENEZUELA_TZ = timezone(timedelta(hours=-4))
 SLEEP_START = 23  # 11 PM
@@ -1554,7 +1562,27 @@ def generar_reporte_horarios():
 
 def _cargar_precios_usdt(horas=24):
     compras, ventas = [], []
-    if SUPABASE_URL and SUPABASE_KEY:
+    ahora = datetime.now(VENEZUELA_TZ)
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d: continue
+                        ts = d.get("ts", "")
+                        if not ts: continue
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        if (ahora - dt).total_seconds() > horas * 3600: continue
+                        c = d["USDT"].get("compra")
+                        v = d["USDT"].get("venta")
+                        if c: compras.append(float(c))
+                        if v: ventas.append(float(v))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+    if len(compras) < 10 and SUPABASE_URL and SUPABASE_KEY:
         try:
             desde = (datetime.now(VENEZUELA_TZ) - timedelta(hours=horas)).isoformat()
             registros = supabase_select_all(ts_gte=desde)
@@ -1567,27 +1595,6 @@ def _cargar_precios_usdt(horas=24):
                 if v: ventas.append(float(v))
         except Exception as e:
             print(f"Supabase error: {e}", flush=True)
-    if len(compras) < 10:
-        try:
-            if os.path.exists(HISTORIAL_PATH):
-                ahora = datetime.now(VENEZUELA_TZ)
-                with open(HISTORIAL_PATH, "r") as f:
-                    for linea in f:
-                        try:
-                            d = json.loads(linea)
-                            if "USDT" not in d: continue
-                            ts = d.get("ts", "")
-                            if not ts: continue
-                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            if (ahora - dt).total_seconds() > horas * 3600: continue
-                            c = d["USDT"].get("compra")
-                            v = d["USDT"].get("venta")
-                            if c: compras.append(float(c))
-                            if v: ventas.append(float(v))
-                        except Exception:
-                            continue
-        except Exception:
-            pass
     return compras, ventas
 
 
@@ -1595,11 +1602,31 @@ def _calcular_tendencia_6h():
     """Regresion lineal simple sobre ultimas 6h de precio compra USDT.
     Retorna pendiente (positiva=subiendo, negativa=bajando) o None."""
     precios, timestamps = [], []
-    if SUPABASE_URL and SUPABASE_KEY:
+    ahora = datetime.now(VENEZUELA_TZ)
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d: continue
+                        ts = d.get("ts", "")
+                        if not ts: continue
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        h = (ahora - dt).total_seconds() / 3600
+                        if h > 6: continue
+                        c = d["USDT"].get("compra")
+                        if c:
+                            precios.append(float(c))
+                            timestamps.append(h)
+                    except Exception:
+                        continue
+    except Exception as e:
+        print(f"Error JSONL tendencia: {e}", flush=True)
+    if len(precios) < 5 and SUPABASE_URL and SUPABASE_KEY:
         try:
             desde = (datetime.now(VENEZUELA_TZ) - timedelta(hours=6)).isoformat()
             registros = supabase_select_all(ts_gte=desde)
-            ahora = datetime.now(VENEZUELA_TZ)
             for rec in registros:
                 usdt = rec.get("USDT")
                 if not isinstance(usdt, dict): continue
@@ -1617,29 +1644,6 @@ def _calcular_tendencia_6h():
                     timestamps.append(len(precios))
         except Exception as e:
             print(f"Supabase tendencia error: {e}", flush=True)
-    if len(precios) < 5:
-        try:
-            if os.path.exists(HISTORIAL_PATH):
-                ahora = datetime.now(VENEZUELA_TZ)
-                with open(HISTORIAL_PATH, "r") as f:
-                    for linea in f:
-                        try:
-                            d = json.loads(linea)
-                            if "USDT" not in d: continue
-                            ts = d.get("ts", "")
-                            if not ts: continue
-                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            h = (ahora - dt).total_seconds() / 3600
-                            if h > 6: continue
-                            c = d["USDT"].get("compra")
-                            if c:
-                                precios.append(float(c))
-                                timestamps.append(h)
-                        except Exception:
-                            continue
-        except Exception as e:
-            print(f"Error calculando tendencia: {e}", flush=True)
-            return None
     if len(precios) < 5:
         return None
     n = len(precios)
@@ -1736,7 +1740,27 @@ def _detectar_niveles_clave():
     """Encuentra niveles de soporte (compra) y resistencia (venta) del USDT.
     Retorna (soportes, resistencias) como listas de precios."""
     compras, ventas = [], []
-    if SUPABASE_URL and SUPABASE_KEY:
+    ahora = datetime.now(VENEZUELA_TZ)
+    try:
+        if os.path.exists(HISTORIAL_PATH):
+            with open(HISTORIAL_PATH, "r") as f:
+                for linea in f:
+                    try:
+                        d = json.loads(linea)
+                        if "USDT" not in d: continue
+                        ts = d.get("ts", "")
+                        if not ts: continue
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        if (ahora - dt).total_seconds() > 86400 * 7: continue
+                        c = d["USDT"].get("compra")
+                        v = d["USDT"].get("venta")
+                        if c: compras.append(float(c))
+                        if v: ventas.append(float(v))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+    if len(compras) < 20 and SUPABASE_URL and SUPABASE_KEY:
         try:
             desde = (datetime.now(VENEZUELA_TZ) - timedelta(days=7)).isoformat()
             registros = supabase_select_all(ts_gte=desde)
@@ -1749,26 +1773,6 @@ def _detectar_niveles_clave():
                 if v: ventas.append(float(v))
         except Exception as e:
             print(f"Supabase niveles error: {e}", flush=True)
-    if len(compras) < 20:
-        try:
-            if os.path.exists(HISTORIAL_PATH):
-                with open(HISTORIAL_PATH, "r") as f:
-                    for linea in f:
-                        try:
-                            d = json.loads(linea)
-                            if "USDT" not in d: continue
-                            ts = d.get("ts", "")
-                            if not ts: continue
-                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            if (datetime.now(VENEZUELA_TZ) - dt).total_seconds() > 86400 * 7: continue
-                            c = d["USDT"].get("compra")
-                            v = d["USDT"].get("venta")
-                            if c: compras.append(float(c))
-                            if v: ventas.append(float(v))
-                        except Exception:
-                            continue
-        except Exception:
-            pass
     if len(compras) < 20:
         return [], []
 
@@ -2791,10 +2795,6 @@ def procesar_callback(cq):
             hoy_vet = datetime.now(VENEZUELA_TZ).date()
             registros = []
             try:
-                hoy_iso = datetime.now(VENEZUELA_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-                registros = supabase_select_all(ts_gte=hoy_iso)
-            except Exception as e:
-                print(f"Supabase lectura fallo, usando JSONL: {e}", flush=True)
                 if os.path.exists(HISTORIAL_PATH):
                     with open(HISTORIAL_PATH, "r") as f:
                         for l in f:
@@ -2805,6 +2805,14 @@ def procesar_callback(cq):
                                     registros.append(d)
                             except Exception:
                                 continue
+            except Exception:
+                pass
+            if not registros and SUPABASE_URL and SUPABASE_KEY:
+                try:
+                    hoy_iso = datetime.now(VENEZUELA_TZ).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                    registros = supabase_select_all(ts_gte=hoy_iso)
+                except Exception as e:
+                    print(f"Supabase lectura fallo: {e}", flush=True)
             if not registros:
                 editar_mensaje(chat_id, msg_id, f"Aún no hay datos históricos para hoy ({hoy_vet}).")
                 return
@@ -3107,6 +3115,25 @@ def loop_monitoreo():
                 except Exception as e:
                     print(f"Error guardando JSONL: {e}", flush=True)
                 supabase_cleanup()
+                # Cleanup JSONL: keep only last RETENTION_DAYS
+                if not hasattr(supabase_cleanup, "_last_jsonl_cleanup") or time.time() - supabase_cleanup._last_jsonl_cleanup > 3600:
+                    supabase_cleanup._last_jsonl_cleanup = time.time()
+                    try:
+                        if os.path.exists(HISTORIAL_PATH):
+                            hasta = (datetime.now(VENEZUELA_TZ) - timedelta(days=RETENTION_DAYS)).isoformat()
+                            with open(HISTORIAL_PATH, "r") as f:
+                                lineas = f.readlines()
+                            with open(HISTORIAL_PATH, "w") as f:
+                                for linea in lineas:
+                                    try:
+                                        d = json.loads(linea)
+                                        ts = d.get("ts", "")
+                                        if ts and ts >= hasta:
+                                            f.write(linea)
+                                    except Exception:
+                                        continue
+                    except Exception as e:
+                        print(f"Error limpiando JSONL: {e}", flush=True)
 
             if not activo:
                 time.sleep(60)
@@ -3232,10 +3259,7 @@ def loop_monitoreo():
                 _verificar_resultados_senales()
                 _top_oportunidades()
 
-            # Detectar cambio de tasa BCV (cada ciclo)
-            _verificar_cambio_tasa_bcv()
-
-                # ============================================================
+            # ============================================================
             # Subastas BCV (ciclo principal + hilo separado como respaldo)
             _scrapear_subastas()
             # MONITOREO DEX MULTI-RED (usa mismo umbral configurado)
