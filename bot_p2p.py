@@ -148,16 +148,17 @@ CONFIG_PATH = "config_usuario.json"
 
 
 def cargar_config_local():
-    sb = supabase_load_config()
-    if sb:
-        return sb
+    local = {}
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r") as f:
-                return json.load(f)
+                local = json.load(f)
     except Exception as e:
         print(f"Error cargando config local: {e}", flush=True)
-    return {}
+    sb = supabase_load_config()
+    if sb:
+        local.update(sb)
+    return local
 
 
 _config_local = cargar_config_local()
@@ -191,6 +192,9 @@ CONFIG_POR_CHAT = {}
 _persisted = _config_local.get("whitelist_ids", [])
 if isinstance(_persisted, list):
     WHITELIST.update(int(x) for x in _persisted if str(x).isdigit())
+_persisted_users = _config_local.get("whitelist_usernames", [])
+if isinstance(_persisted_users, list):
+    WHITELIST_USERNAMES.update(u.lower() for u in _persisted_users if isinstance(u, str))
 # Cargar usernames del env (sigue siendo util para config inicial)
 _whitelist_raw = os.getenv("USER_WHITELIST", "").strip()
 if _whitelist_raw:
@@ -204,6 +208,7 @@ if _whitelist_raw:
 
 def _guardar_whitelist():
     CONFIG["whitelist_ids"] = list(WHITELIST)
+    CONFIG["whitelist_usernames"] = list(WHITELIST_USERNAMES)
     guardar_config_local()
 
 def _es_master(chat_id):
@@ -772,6 +777,8 @@ def guardar_config_local():
             "default_crypto": CONFIG.get("default_crypto", "USDT"),
             "grupo_chat_id": CONFIG.get("grupo_chat_id", ""),
             "ultimo_conteo_miembros": CONFIG.get("ultimo_conteo_miembros", 0),
+            "whitelist_ids": CONFIG.get("whitelist_ids", []),
+            "whitelist_usernames": CONFIG.get("whitelist_usernames", []),
         }
         supabase_save_config(config_dict)
     except Exception as e:
