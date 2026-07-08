@@ -106,7 +106,7 @@ def supabase_select_all(ts_gte=None):
 def supabase_load_config():
     if not SUPABASE_URL or not SUPABASE_KEY:
         return {}
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CONFIG_TABLE}?id=eq.1&select=config"
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CONFIG_TABLE}?id=eq.1&select=config,config_por_chat"
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     try:
         resp = requests.get(url, headers=headers, timeout=(5, 5))
@@ -120,7 +120,7 @@ def supabase_load_config():
         return {}
 
 
-def supabase_save_config(config_dict):
+def supabase_save_config(config_dict, config_por_chat=None):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return
     def _do_save():
@@ -132,7 +132,10 @@ def supabase_save_config(config_dict):
             "Prefer": "resolution=merge-duplicates",
         }
         try:
-            resp = requests.post(url, json={"id": 1, "config": config_dict}, headers=headers, timeout=(5, 5))
+            payload = {"id": 1, "config": config_dict}
+            if config_por_chat:
+                payload["config_por_chat"] = config_por_chat
+            resp = requests.post(url, json=payload, headers=headers, timeout=(5, 5))
             if resp.status_code not in (200, 201):
                 print(f"[Supabase] Save config returned {resp.status_code}", flush=True)
         except Exception as e:
@@ -146,6 +149,21 @@ def supabase_save_config(config_dict):
 
 CONFIG_PATH = "config_usuario.json"
 
+
+def _cargar_config_por_chat_desde_supabase():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_CONFIG_TABLE}?id=eq.1&select=config_por_chat"
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        resp = requests.get(url, headers=headers, timeout=(5, 5))
+        resp.raise_for_status()
+        rows = resp.json()
+        if rows and isinstance(rows[0].get("config_por_chat"), dict):
+            data = rows[0]["config_por_chat"]
+            CONFIG_POR_CHAT.update({int(k): v for k, v in data.items() if str(k).lstrip("-").isdigit()})
+    except Exception as e:
+        print(f"[Supabase] Error loading config_por_chat: {e}", flush=True)
 
 def cargar_config_local():
     local = {}
@@ -187,6 +205,7 @@ CONFIG = {
 WHITELIST = set()
 WHITELIST_USERNAMES = set()
 CONFIG_POR_CHAT = {}
+_cargar_config_por_chat_desde_supabase()
 
 # Cargar whitelist persistida
 _persisted = _config_local.get("whitelist_ids", [])
@@ -227,16 +246,12 @@ def _save_chat_config(chat_id, updates):
     if chat_id not in CONFIG_POR_CHAT:
         CONFIG_POR_CHAT[chat_id] = {}
     CONFIG_POR_CHAT[chat_id].update(updates)
-    try:
-        with open("config_por_chat.json", "w") as f:
-            json.dump(CONFIG_POR_CHAT, f, default=str)
-    except Exception:
-        pass
+    guardar_config_local()
 
 def _cargar_chat_configs():
     try:
-        if os.path.exists("config_por_chat.json"):
-            with open("config_por_chat.json", "r") as f:
+        if os.path.exists(CONFIG_POR_CHAT_PATH):
+            with open(CONFIG_POR_CHAT_PATH, "r") as f:
                 data = json.load(f)
                 CONFIG_POR_CHAT.update({int(k): v for k, v in data.items()})
     except Exception:
@@ -766,10 +781,17 @@ def _precio_p2p_resumen():
     return "\n".join(partes)
 
 
+if os.path.isdir("/data"):
+    CONFIG_POR_CHAT_PATH = "/data/config_por_chat.json"
+else:
+    CONFIG_POR_CHAT_PATH = "config_por_chat.json"
+
 def guardar_config_local():
     try:
         with open(CONFIG_PATH, "w") as f:
             json.dump(CONFIG, f)
+        with open(CONFIG_POR_CHAT_PATH, "w") as f:
+            json.dump(CONFIG_POR_CHAT, f, default=str)
         config_dict = {
             "capital": CONFIG.get("capital", 100),
             "margen_objetivo": CONFIG.get("margen_objetivo", 0.8),
@@ -780,7 +802,7 @@ def guardar_config_local():
             "whitelist_ids": CONFIG.get("whitelist_ids", []),
             "whitelist_usernames": CONFIG.get("whitelist_usernames", []),
         }
-        supabase_save_config(config_dict)
+        supabase_save_config(config_dict, config_por_chat=dict(CONFIG_POR_CHAT))
     except Exception as e:
         print(f"Error guardando config: {e}", flush=True)
 
@@ -1019,6 +1041,19 @@ def enviar_menu(chat_id=None, texto=None):
         "chat_id": cid, "text": texto,
         "parse_mode": "Markdown", "reply_markup": kb
     })
+
+def _enviar_menu_a_whitelist(texto):
+    """Envía el menú al master y a todos los whitelist IDs."""
+    enviar_menu(texto=texto)
+    for uid in WHITELIST:
+        try:
+            kb = json.dumps({"inline_keyboard": _construir_teclado(uid)})
+            _tg_call("sendMessage", {
+                "chat_id": uid, "text": texto,
+                "parse_mode": "Markdown", "reply_markup": kb
+            })
+        except Exception:
+            pass
 
 
 def responder_callback(callback_id, texto=None):
@@ -2033,6 +2068,10 @@ def _resumen_diario():
 # PROCESAR ACTUALIZACIONES TELEGRAM
 # ============================================================
 def procesar_mensaje(texto, chat_id, username=""):
+    if username and username.lower() in WHITELIST_USERNAMES and chat_id not in WHITELIST:
+        WHITELIST.add(chat_id)
+        _guardar_whitelist()
+        print(f"[Whitelist] @{username} auto-registrado como {chat_id}", flush=True)
     if (texto.startswith("/precio") or texto.startswith("/p2p") or texto.startswith("/mercado")):
         if _es_master(chat_id) or _autorizado(chat_id):
             _tg_call("sendMessage", {"chat_id": chat_id, "text": _precio_p2p_resumen(), "parse_mode": "Markdown"})
@@ -3295,7 +3334,7 @@ def loop_monitoreo():
                 _ULTIMA_HORA_ENVIADA = h
                 if h >= 7 and h % 2 == 1:
                     precio_msg = _precio_p2p_resumen()
-                    enviar_menu(texto=precio_msg)
+                    _enviar_menu_a_whitelist(precio_msg)
                     _send_channel(precio_msg)
             _refrescar_paneles()
         except Exception as e:
